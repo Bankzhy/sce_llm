@@ -17,7 +17,7 @@ max_seq_length = 2048
 dtype = None
 load_in_4bit = True
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "unsloth/Llama-3.1-8B",
+    model_name = "unsloth/codellama-7b-bnb-4bit",
     max_seq_length = max_seq_length,
     dtype = dtype,
     load_in_4bit = load_in_4bit,
@@ -25,7 +25,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 )
 
 def load_big_code_ast():
-    csv_file = os.path.join("../dataset", "test.csv")
+    csv_file = os.path.join("../dataset", "ast_train_java.csv")
     examples = []
 
     with open(csv_file, mode="r", encoding="utf-8") as f:
