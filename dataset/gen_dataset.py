@@ -96,7 +96,7 @@ def generate_java_error_code(code):
 
 def gen():
     rows = []
-    dataset = load_dataset('code-search-net/code_search_net', 'java', split='train')
+    dataset = load_dataset('code-search-net/code_search_net', 'java', split='test')
     for index in range(0, len(dataset)):
         data = dataset[index]
         code = build_java_parse_code(data['func_code_string'])
@@ -127,7 +127,7 @@ def gen():
 
         # print(json.dumps(ast, indent=2))
     # ---- Write CSV ----
-    with open("output.csv", mode="w", newline="", encoding="utf-8") as f:
+    with open("test_java.csv", mode="w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["code", "ast_json", "label"])
         writer.writeheader()
         writer.writerows(rows)

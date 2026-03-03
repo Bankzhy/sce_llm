@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 from tqdm import tqdm
@@ -7,73 +8,43 @@ import torch
 from trl import SFTTrainer
 from transformers import TrainingArguments
 from datasets import load_dataset, Dataset
+import sys
+OVER_SIZE_LIMIT = 200_000_000
 
-
+csv.field_size_limit(OVER_SIZE_LIMIT)
 # 加载模型
 max_seq_length = 2048
 dtype = None
 load_in_4bit = True
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="codellama/CodeLlama-7b-hf",
-    max_seq_length = None,
+    model_name = "unsloth/Llama-3.1-8B",
+    max_seq_length = max_seq_length,
     dtype = dtype,
-    load_in_4bit = True,   # strongly recommended
+    load_in_4bit = load_in_4bit,
+    # token = "YOUR_HF_TOKEN", # HF Token for gated models
 )
 
-def load_big_code_clone():
-    split = "train"
-    json_file = os.path.join("../bc_data", "data.json")
-    file = os.path.join("../bc_data", (split + ".txt"))
-
-    codes_1 = []
-    codes_2 = []
-    labels = []
-    json_data = {}
+def load_big_code_ast():
+    csv_file = os.path.join("../dataset", "test.csv")
     examples = []
 
-    with open(json_file, encoding='ISO-8859-1') as jf:
-        lines = jf.readlines()
-        print("loading dataset:")
-        for line in tqdm(lines):
-            data = json.loads(line.strip())
-            source = data['code']
-            json_data[data["idx"]] = {
-                "code": source,
-
-            }
-
-    with open(file, encoding='ISO-8859-1') as f:
-        lines = f.readlines()
-        for index,line in tqdm(enumerate(lines)):
-
-            if index > 350000:
-                break
-
-            try:
-                ll = line.split("\t")
-                if ll[0] not in json_data.keys() or ll[1] not in json_data.keys():
-                    continue
-
-                codes_1.append(json_data[ll[0]]["code"])
-                codes_2.append(json_data[ll[0]]["code"])
-                label = ll[2].replace("\n", "")
-                labels.append(int(label))
-                sample = convert_sample(json_data[ll[0]]["code"], json_data[ll[1]]["code"], label)
-                examples.append(sample)
-            except Exception as e:
-                # print(e)
+    with open(csv_file, mode="r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for index, row in enumerate(reader):
+            if index == 0:
                 continue
-    # return codes_1, codes_2, labels
+            sample = convert_sample(row[0], row[1])
+            examples.append(sample)
+
+
     return examples
 
-def convert_sample(code1, code2, label):
+def convert_sample(code, ast):
     return {
-        "instruction": "Please identify the following two codes is code clone or not, answer me just 'true' or 'false', no more other words.",
-        "input": f"Code A:\n{code1}\n\nCode B:\n{code2}",
+        "instruction": "Please generate the AST for given code with JSON format.",
+        "input": f"{code}",
         "output": (
-            "TRUE"
-            if label == 1 else
-            "FALSE"
+            ast
         )
     }
 
@@ -102,7 +73,7 @@ pass
 if __name__ == '__main__':
     # codes_1, codes_2, labels = load_big_code_clone()
     # dataset = load_big_code_clone()
-    dataset = Dataset.from_pandas(pd.DataFrame(data=load_big_code_clone()))
+    dataset = Dataset.from_pandas(pd.DataFrame(data=load_big_code_ast()))
     dataset = dataset.map(formatting_prompts_func, batched=True, )
 
 
