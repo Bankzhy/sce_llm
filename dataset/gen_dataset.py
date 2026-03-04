@@ -37,8 +37,13 @@ def generate_java_ast(code):
     if method_node is None:
         return None
     method_ast_json = node_to_dict(method_node)
+    method_cfg_json = generate_java_cfg(method_node)
     return method_ast_json
 
+def generate_java_cfg(method_node):
+    for node in method_node.children:
+        if node.type == "method_declaration":
+            pass
 
 def generate_java_error_code(code):
     # Java separators and operators
