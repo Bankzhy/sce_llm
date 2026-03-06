@@ -61,7 +61,7 @@ def generate_ast(prompt):
 
     outputs = model.generate(
         **inputs,
-        # max_new_tokens=1024,
+        max_new_tokens=1024,
         temperature=0.1,
     )
     result = tokenizer.decode(outputs[0], skip_special_tokens=True)
