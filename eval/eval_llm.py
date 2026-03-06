@@ -2,32 +2,63 @@ import csv
 import json
 import os
 from zss import Node, simple_distance
-from unsloth import FastLanguageModel
+# from unsloth import FastLanguageModel
 # 加载模型
 max_seq_length = 2048
 dtype = None
 load_in_4bit = True
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
 
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/codellama-7b-bnb-4bit",
-    max_seq_length=max_seq_length,
-    dtype=dtype,
-    load_in_4bit=load_in_4bit,
-    # token = "YOUR_HF_TOKEN", # HF Token for gated models
+# model, tokenizer = FastLanguageModel.from_pretrained(
+#     model_name="unsloth/codellama-7b-bnb-4bit",
+#     max_seq_length=max_seq_length,
+#     dtype=dtype,
+#     load_in_4bit=load_in_4bit,
+#     # token = "YOUR_HF_TOKEN", # HF Token for gated models
+# )
+# FastLanguageModel.for_inference(model)
+
+model_name = "codellama/CodeLlama-7b-Instruct-hf"
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    device_map="auto",
+    torch_dtype=torch.float16
 )
-FastLanguageModel.for_inference(model)
 
 def build_prompt(code):
 
     prompt = f"""
-        Generate the Abstract Syntax Tree (AST) of the following Java code.
-        Return ONLY JSON format.
+        You are a program analysis tool.
+        
+        Task:
+        Generate a compact Abstract Syntax Tree (AST) for the Java code.
+        
+        Constraints:
+        - Only keep structural nodes
+        - Ignore identifiers and literals
+        - Ignore punctuation tokens
+        - Use JSON format
+        - Output ONLY the AST
+        
+        Allowed nodes:
+        MethodDeclaration
+        IfStatement
+        ForStatement
+        WhileStatement
+        ReturnStatement
+        VariableDeclaration
+        Assignment
+        MethodInvocation
         
         Code:
         {code}
         
         AST:
-    """
+        """
     return prompt
 
 def load_big_code_ast():
@@ -61,7 +92,7 @@ def generate_ast(prompt):
 
     outputs = model.generate(
         **inputs,
-        max_new_tokens=1024,
+        max_new_tokens=3000,
         temperature=0.1,
     )
     result = tokenizer.decode(outputs[0], skip_special_tokens=True)
