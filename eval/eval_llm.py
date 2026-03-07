@@ -1,21 +1,56 @@
 import csv
 import json
+import requests
 import os
 from zss import Node, simple_distance
-from unsloth import FastLanguageModel
+# from unsloth import FastLanguageModel
 # 加载模型
 max_seq_length = 2048
 dtype = None
 load_in_4bit = True
 
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/codellama-7b-bnb-4bit",
-    # max_seq_length=max_seq_length,
-    dtype=dtype,
-    load_in_4bit=load_in_4bit,
-    # token = "YOUR_HF_TOKEN", # HF Token for gated models
-)
-FastLanguageModel.for_inference(model)
+# model, tokenizer = FastLanguageModel.from_pretrained(
+#     model_name="unsloth/codellama-7b-bnb-4bit",
+#     # max_seq_length=max_seq_length,
+#     dtype=dtype,
+#     load_in_4bit=load_in_4bit,
+#     # token = "YOUR_HF_TOKEN", # HF Token for gated models
+# )
+# FastLanguageModel.for_inference(model)
+
+def generate_ollama_local(content, history=[]):
+    msg = history
+    msg.append(
+        {
+            "role": "user",
+            "content": content
+        }
+    )
+
+    data = {
+        "model": "llama3:latest",
+        # "temperature": 0,
+        "messages": msg,
+        "stream": False,
+        "options": {
+        }
+    }
+
+    # data =  {
+    #         "role": "user",
+    #         "content": content
+    # }
+
+    response = requests.post("http://localhost:11434/api/chat", json=data)
+
+    # api = APIMaster.objects.get(api_name="llama3")
+    # api.api_current_count += len(ques)
+    # api.save()
+
+    result = response.json()
+    result = result["message"]["content"]
+    # print(result)
+    return result
 
 def build_prompt(code):
 
@@ -31,16 +66,17 @@ def build_prompt(code):
         - Ignore punctuation tokens
         - Use JSON format
         - Output ONLY the AST
+        - The AST must be complete
         
         Allowed nodes:
-        MethodDeclaration
-        IfStatement
-        ForStatement
-        WhileStatement
-        ReturnStatement
-        VariableDeclaration
-        Assignment
-        MethodInvocation
+            MethodDeclaration
+            IfStatement
+            ForStatement
+            WhileStatement
+            ReturnStatement
+            VariableDeclaration
+            Assignment
+            MethodInvocation
         
         Code:
         {code}
@@ -73,26 +109,26 @@ def load_big_code_ast():
 
 
 def generate_ast(prompt):
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-    ).to("cuda")
+    # inputs = tokenizer(
+    #     prompt,
+    #     return_tensors="pt",
+    # ).to("cuda")
+    #
+    # outputs = model.generate(
+    #     **inputs,
+    #     # max_new_tokens=2048,
+    #     temperature=0.1,
+    # )
+    # result = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    outputs = model.generate(
-        **inputs,
-        # max_new_tokens=2048,
-        temperature=0.1,
-    )
-    result = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
+    result = generate_ollama_local(prompt)
     ast_text = result.split("AST:")[-1].strip()
     print(ast_text)
-    # try:
-    #     ast = json.loads(ast_text)
-    #     return ast, True
-    # except:
-    #     return None, False
-    return ast_text, True
+    try:
+        ast = json.loads(ast_text)
+        return ast, True
+    except:
+        return None, False
 
 ############################################
 # 5. AST → Tree (for TED)
@@ -205,18 +241,18 @@ if __name__ == '__main__':
         prompt = build_prompt(code)
 
         pred_ast, valid = generate_ast(prompt)
-        with open(str(index)+".txt", "w", encoding="utf-8") as f:
-            f.write(pred_ast)
-            f.close()
-        # if not valid:
-        #     continue
-        # valid_count += 1
-        # p, r, f1 = node_f1(pred_ast, ast)
-        # ted = tree_edit_distance(pred_ast, ast)
-        # precisions.append(p)
-        # recalls.append(r)
-        # f1s.append(f1)
-        # teds.append(ted)
+        # with open(str(index)+".txt", "w", encoding="utf-8") as f:
+        #     f.write(pred_ast)
+        #     f.close()
+        if not valid:
+            continue
+        valid_count += 1
+        p, r, f1 = node_f1(pred_ast, ast)
+        ted = tree_edit_distance(pred_ast, ast)
+        precisions.append(p)
+        recalls.append(r)
+        f1s.append(f1)
+        teds.append(ted)
     valid_rate = valid_count / len(test_data)
 
     avg_precision = sum(precisions) / len(precisions)
