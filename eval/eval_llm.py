@@ -23,7 +23,7 @@ def build_prompt(code):
         You are a program analysis tool.
         
         Task:
-        Generate a compact Abstract Syntax Tree (AST) for the Java code.
+        Generate a Abstract Syntax Tree (AST) for the Java code.
         
         Constraints:
         - Only keep structural nodes
@@ -80,7 +80,7 @@ def generate_ast(prompt):
 
     outputs = model.generate(
         **inputs,
-        max_new_tokens=2048,
+        # max_new_tokens=2048,
         temperature=0.1,
     )
     result = tokenizer.decode(outputs[0], skip_special_tokens=True)
