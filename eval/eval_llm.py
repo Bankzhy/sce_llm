@@ -87,11 +87,12 @@ def generate_ast(prompt):
 
     ast_text = result.split("AST:")[-1].strip()
     print(ast_text)
-    try:
-        ast = json.loads(ast_text)
-        return ast, True
-    except:
-        return None, False
+    # try:
+    #     ast = json.loads(ast_text)
+    #     return ast, True
+    # except:
+    #     return None, False
+    return ast_text, True
 
 ############################################
 # 5. AST → Tree (for TED)
@@ -198,21 +199,24 @@ if __name__ == '__main__':
     f1s = []
     teds = []
 
-    for sample in test_data:
+    for index, sample in enumerate(test_data):
         code = sample["code"]
         ast = sample["ast"]
         prompt = build_prompt(code)
 
         pred_ast, valid = generate_ast(prompt)
-        if not valid:
-            continue
-        valid_count += 1
-        p, r, f1 = node_f1(pred_ast, ast)
-        ted = tree_edit_distance(pred_ast, ast)
-        precisions.append(p)
-        recalls.append(r)
-        f1s.append(f1)
-        teds.append(ted)
+        with open(str(index)+".txt", "w", encoding="utf-8") as f:
+            f.write(pred_ast)
+            f.close()
+        # if not valid:
+        #     continue
+        # valid_count += 1
+        # p, r, f1 = node_f1(pred_ast, ast)
+        # ted = tree_edit_distance(pred_ast, ast)
+        # precisions.append(p)
+        # recalls.append(r)
+        # f1s.append(f1)
+        # teds.append(ted)
     valid_rate = valid_count / len(test_data)
 
     avg_precision = sum(precisions) / len(precisions)
