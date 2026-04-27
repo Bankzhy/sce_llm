@@ -1,5 +1,7 @@
 import csv
 import json
+import re
+
 import requests
 import os
 from zss import Node, simple_distance
@@ -28,8 +30,8 @@ def generate_ollama_local(content, history=[]):
     )
 
     data = {
-        "model": "llama3:latest",
-        # "temperature": 0,
+        "model": "codellama:7b",
+        "temperature": 0,
         "messages": msg,
         "stream": False,
         "options": {
@@ -124,6 +126,7 @@ def generate_ast(prompt):
     result = generate_ollama_local(prompt)
     ast_text = result.split("AST:")[-1].strip()
     print(ast_text)
+    ast_text = re.search(r"\{.*\}", ast_text, re.S).group()
     try:
         ast = json.loads(ast_text)
         return ast, True
@@ -241,6 +244,9 @@ if __name__ == '__main__':
         prompt = build_prompt(code)
 
         pred_ast, valid = generate_ast(prompt)
+        print(pred_ast)
+        print(ast)
+
         # with open(str(index)+".txt", "w", encoding="utf-8") as f:
         #     f.write(pred_ast)
         #     f.close()

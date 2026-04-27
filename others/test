@@ -1,0 +1,41 @@
+Generate a Abstract Syntax Tree (AST) for the Java code.
+
+protected final void fastPathOrderedEmit(U value, boolean delayError, Disposable disposable) {
+        final Observer<? super V> observer = downstream;
+        final SimplePlainQueue<U> q = queue;
+
+        if (wip.get() == 0 && wip.compareAndSet(0, 1)) {
+            if (q.isEmpty()) {
+                accept(observer, value);
+                if (leave(-1) == 0) {
+                    return;
+                }
+            } else {
+                q.offer(value);
+            }
+        } else {
+            q.offer(value);
+            if (!enter()) {
+                return;
+            }
+        }
+        QueueDrainHelper.drainLoop(q, observer, delayError, disposable, this);
+}
+
+
+Generate a Abstract Syntax Tree (AST) for the Java code.
+
+@CheckReturnValue
+@NonNull
+@SchedulerSupport(SchedulerSupport.NONE)
+public static <T> Observable<T> ambArray(ObservableSource<? extends T>... sources) {
+    ObjectHelper.requireNonNull(sources ""sources is null"");
+    int len = sources.length;
+    if (len == 0) {
+        return empty();
+    }
+    if (len == 1) {
+        return (Observable<T>)wrap(sources[0]);
+    }
+    return RxJavaPlugins.onAssembly(new ObservableAmb<T>(sources, null));
+}
