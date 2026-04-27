@@ -31,12 +31,6 @@ def load_big_code_ast():
     with open(csv_file, mode="r", encoding="utf-8") as f:
         reader = csv.reader(f)
         for index, row in enumerate(reader):
-            if index == 0:
-                continue
-
-            if index == 1000:
-                break
-
             sample = convert_sample(row[0], row[1])
             examples.append(sample)
 
