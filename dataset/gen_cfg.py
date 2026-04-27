@@ -463,6 +463,8 @@ def generate_python_error_code(code: str) -> str:
 
     start, end = random.choice(occurrences)
     return code[:start] + code[end:]
+
+
 def extract_code(text):
     pattern = r"```(?:\w+)?\n(.*?)```"
     match = re.search(pattern, text, re.DOTALL)
