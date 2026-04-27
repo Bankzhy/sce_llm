@@ -191,10 +191,13 @@ def generate_python_error_code(code: str) -> str:
 
 
 def gen():
-    rows = []
+    train_rows = []
+    test_rows = []
     dataset = load_dataset("greengerong/leetcode", split="train")
     error_num = 0
+
     for index in range(0, len(dataset)):
+
         try:
             java_code = dataset[index]["java"]
             python_code = dataset[index]["python"]
@@ -202,6 +205,9 @@ def gen():
             python_code = extract_code(python_code)
             java_cfg = gen_java_cfg(java_code)
             python_cfg = gen_py_cfg(python_code)
+
+            # 根据 index 选择目标集合
+            rows = train_rows if index <= 2000 else test_rows
 
             if java_cfg is not None and python_cfg is not None:
                 error_java_code_list = generate_java_error_code_list(java_code, 4)
@@ -245,11 +251,21 @@ def gen():
             print(e)
             error_num += 1
             continue
-    # ---- Write CSV ----
-    with open("cfg.csv", mode="w", newline="", encoding="utf-8") as f:
+
+    # ---- Write Train CSV ----
+    with open("cfg_train.csv", mode="w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["code", "cfg", "lang", "is_error"])
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(train_rows)
+
+        print(f"Error: {error_num}")
+        print(f"Saved to cfg.csv")
+
+    # ---- Write Test CSV ----
+    with open("cfg_test.csv", mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["code", "cfg", "lang", "is_error"])
+        writer.writeheader()
+        writer.writerows(test_rows)
 
         print(f"Error: {error_num}")
         print(f"Saved to cfg.csv")

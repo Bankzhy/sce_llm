@@ -25,7 +25,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 )
 
 def load_big_code_ast():
-    csv_file = os.path.join("../dataset", "cfg.csv")
+    csv_file = os.path.join("../dataset", "cfg_train.csv")
     examples = []
 
     with open(csv_file, mode="r", encoding="utf-8") as f:
@@ -163,17 +163,16 @@ if __name__ == '__main__':
     # 设置训练参数
     model = FastLanguageModel.get_peft_model(
         model,
-        r=16,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj", ],
-        lora_alpha=16,
+        r=32,
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj"
+        ],
+        lora_alpha=64,
         lora_dropout=0,
         bias="none",
         use_gradient_checkpointing=True,
         random_state=3407,
-        max_seq_length=max_seq_length,
-        use_rslora=False,
-        loftq_config=None,
     )
 
     trainer = SFTTrainer(
@@ -182,18 +181,20 @@ if __name__ == '__main__':
         dataset_text_field="text",
         max_seq_length=max_seq_length,
         tokenizer=tokenizer,
+        packing=True,
         args=TrainingArguments(
-            per_device_train_batch_size=2,
+            per_device_train_batch_size=4,
             gradient_accumulation_steps=4,
-            warmup_steps=10,
-            max_steps=60,
+            num_train_epochs=3,
+            warmup_ratio=0.03,
+            learning_rate=2e-4,
             fp16=not torch.cuda.is_bf16_supported(),
             bf16=torch.cuda.is_bf16_supported(),
-            logging_steps=1,
-            output_dir="outputs",
+            logging_steps=10,
             optim="adamw_8bit",
             weight_decay=0.01,
-            lr_scheduler_type="linear",
+            lr_scheduler_type="cosine",
+            output_dir="outputs",
             seed=3407,
         ),
     )
