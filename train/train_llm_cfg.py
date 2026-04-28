@@ -197,7 +197,8 @@ if __name__ == '__main__':
 
     # 保存微调模型
     model.save_pretrained("lora_model_1")
+    tokenizer.save_pretrained("lora_model_1")
 
     # 合并模型，保存为16位hf
-    # model.save_pretrained_merged("outputs", tokenizer, save_method="merged_16bit", )
+    model.save_pretrained_merged("outputs", tokenizer, save_method="merged_16bit", )
 
