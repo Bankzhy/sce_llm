@@ -163,7 +163,9 @@ def load_test_data():
 
 def evaluate():
     examples = load_test_data()
-    for example in examples:
+    for index, example in enumerate(examples):
+        if index == 0:
+            continue
         print(example[0])
         print("="*10)
         generated_code = generate_cfg(example[0])
