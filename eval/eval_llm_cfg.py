@@ -143,7 +143,7 @@ def generate_cfg(code):
     )
 
     cfg = result.split("CFG:")[-1].strip()
-
+    print(cfg)
     return cfg
 
 def load_test_data():
@@ -163,6 +163,7 @@ def evaluate():
     examples = load_test_data()
     for example in examples:
         generated_code = generate_cfg(example[0])
+        break
 
 if __name__ == '__main__':
     evaluate()
