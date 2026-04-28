@@ -2,6 +2,7 @@ import csv
 import os
 import re
 import torch
+from peft import PeftModel
 from unsloth import FastLanguageModel
 from transformers import TextStreamer
 
@@ -13,14 +14,15 @@ from transformers import TextStreamer
 max_seq_length = 4096
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/codellama-7b-bnb-4bit",   # 你的训练结果目录
+    model_name=r"/root/autodl-tmp/sce_llm/train/lora_model_1",   # 你的训练结果目录
     max_seq_length=max_seq_length,
     dtype=None,
     load_in_4bit=True,
 )
-model.load_adapter("train/lora_model_1")
-FastLanguageModel.for_inference(model)
 
+FastLanguageModel.for_inference(model)
+# lora_model_path = r"C:\Users\zhoun\PycharmProjects\sce_llm\lora_model_1"
+# model = PeftModel.from_pretrained(model, lora_model_path)
 
 ########################################
 # 2. 构造推理prompt
@@ -132,7 +134,7 @@ def generate_cfg(code):
 
     outputs = model.generate(
         **inputs,
-        max_new_tokens=1024,
+        max_new_tokens=max_seq_length,
         temperature=0.1,
         do_sample=False,
     )
