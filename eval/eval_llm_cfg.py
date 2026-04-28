@@ -13,12 +13,12 @@ from transformers import TextStreamer
 max_seq_length = 4096
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="train/lora_model_1",   # 你的训练结果目录
+    model_name="unsloth/codellama-7b-bnb-4bit",   # 你的训练结果目录
     max_seq_length=max_seq_length,
     dtype=None,
     load_in_4bit=True,
 )
-
+model.load_adapter("train/lora_model_1")
 FastLanguageModel.for_inference(model)
 
 
