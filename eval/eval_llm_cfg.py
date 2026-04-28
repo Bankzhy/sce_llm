@@ -149,7 +149,7 @@ def generate_cfg(code):
     return cfg
 
 def load_test_data():
-    csv_file = os.path.join("../dataset", "cfg_train.csv")
+    csv_file = os.path.join("../dataset", "cfg_test.csv")
     examples = []
 
     with open(csv_file, mode="r", encoding="utf-8") as f:
