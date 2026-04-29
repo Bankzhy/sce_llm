@@ -145,7 +145,7 @@ def generate_cfg(code):
         generated_tokens,
         skip_special_tokens=True
     )
-    print(result)
+    # print(result)
 
     return result
 
@@ -168,7 +168,7 @@ def evaluate():
     for index, example in enumerate(examples):
         if index == 0:
             continue
-
+        print(index)
         generated_cfg = generate_cfg(example[0])
         rows.append(
             {
