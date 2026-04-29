@@ -163,13 +163,26 @@ def load_test_data():
 
 def evaluate():
     examples = load_test_data()
+    rows = []
     for index, example in enumerate(examples):
         if index == 0:
             continue
-        print(example[0])
-        print("="*10)
-        generated_code = generate_cfg(example[0])
-        break
+        generated_cfg = generate_cfg(example[0])
+        rows.append(
+            {
+                "code": example[0],
+                "cfg": example[1],
+                "lang": example[2],
+                "is_error": example[3],
+                "predict": generated_cfg,
+            }
+        )
+    # ---- Write Result CSV ----
+    with open("predict.csv", mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["code", "cfg", "lang", "is_error", "predict"])
+        writer.writeheader()
+        writer.writerows(rows)
+
 
 if __name__ == '__main__':
     evaluate()
