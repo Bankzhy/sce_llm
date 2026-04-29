@@ -134,18 +134,20 @@ def generate_cfg(code):
 
     outputs = model.generate(
         **inputs,
-        max_new_tokens=max_seq_length,
-        temperature=0.1,
+        max_new_tokens=256,
         do_sample=False,
+        use_cache=True,
     )
+
+    generated_tokens = outputs[0][inputs.input_ids.shape[1]:]
 
     result = tokenizer.decode(
-        outputs[0],
+        generated_tokens,
         skip_special_tokens=True
     )
+    print(result)
 
-    cfg = result.split("CFG:")[-1].strip()
-    return cfg
+    return result
 
 def load_test_data():
     csv_file = os.path.join("../dataset", "cfg_test.csv")
@@ -166,7 +168,7 @@ def evaluate():
     for index, example in enumerate(examples):
         if index == 0:
             continue
-        print(f"predicting....{index}")
+
         generated_cfg = generate_cfg(example[0])
         rows.append(
             {
