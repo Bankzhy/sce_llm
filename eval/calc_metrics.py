@@ -8,7 +8,7 @@ from difflib import SequenceMatcher
 # 配置
 ########################################
 
-NODE_SIM_THRESHOLD = 0.75
+NODE_SIM_THRESHOLD = 0.95
 
 
 ########################################
@@ -35,14 +35,15 @@ def normalize_text(text):
 
 def parse_nodes(cfg_text):
     """
-    解析:
-    1[label="xxx", shape="rectangle"]
+    兼容：
+    1[label="xxx", shape=rectangle]
+    1[label=xxx, shape=rectangle]
     """
 
     if not isinstance(cfg_text, str):
         return {}
 
-    pattern = r'(\d+)\s*\[label="(.*?)"'
+    pattern = r'(\d+)\s*\[\s*label=(.*?)\s*,\s*shape='
 
     matches = re.findall(
         pattern,
@@ -53,6 +54,11 @@ def parse_nodes(cfg_text):
     nodes = {}
 
     for node_id, label in matches:
+        label = label.strip()
+
+        if label.startswith('"') and label.endswith('"'):
+            label = label[1:-1]
+
         nodes[node_id] = normalize_text(label)
 
     return nodes
@@ -325,107 +331,302 @@ def compute_path_similarity(
 def evaluate(csv_path):
     df = pd.read_csv(csv_path)
 
-    node_coverages = []
+    ########################################
+    # Overall
+    ########################################
     node_precisions = []
     node_recalls = []
     node_f1s = []
 
-    edge_precisions = []
-    edge_recalls = []
-    edge_f1s = []
+    exact_match_count = 0
+    zero_match_count = 0
+    total_count = 0
 
-    path_similarities = []
+    # overall remove zero-match
+    overall_valid_precisions = []
+    overall_valid_recalls = []
+    overall_valid_f1s = []
 
-    valid_count = 0
+    ########################################
+    # is_error=False
+    ########################################
+    normal_precisions = []
+    normal_recalls = []
+    normal_f1s = []
 
+    normal_exact_count = 0
+    normal_zero_count = 0
+    normal_count = 0
+
+    # normal remove zero-match
+    normal_valid_precisions = []
+    normal_valid_recalls = []
+    normal_valid_f1s = []
+
+    ########################################
+    # is_error=True
+    ########################################
+    error_precisions = []
+    error_recalls = []
+    error_f1s = []
+
+    error_exact_count = 0
+    error_zero_count = 0
+    error_count = 0
+
+    # error remove zero-match
+    error_valid_precisions = []
+    error_valid_recalls = []
+    error_valid_f1s = []
+
+    ########################################
+    # Iterate samples
+    ########################################
     for _, row in df.iterrows():
-        if row["is_error"]:
-            continue
+        gt_cfg = str(row["cfg"]).strip()
+        pred_cfg = str(row["predict"]).strip()
 
-        gt_cfg = row["cfg"]
-        pred_cfg = row["predict"]
+        is_error = row["is_error"]
 
         node_metrics = compute_node_metrics(
             pred_cfg,
             gt_cfg
         )
 
-        edge_metrics = compute_edge_metrics(
-            pred_cfg,
-            gt_cfg,
-            node_metrics["matched_pairs"]
-        )
+        node_precision = node_metrics["precision"]
+        node_recall = node_metrics["recall"]
+        node_f1 = node_metrics["f1"]
 
-        path_similarity = compute_path_similarity(
-            pred_cfg,
-            gt_cfg
-        )
+        ########################################
+        # Overall
+        ########################################
+        node_precisions.append(node_precision)
+        node_recalls.append(node_recall)
+        node_f1s.append(node_f1)
 
-        node_coverages.append(
-            node_metrics["coverage"]
-        )
+        if node_f1 == 1.0:
+            exact_match_count += 1
 
-        node_precisions.append(
-            node_metrics["precision"]
-        )
+        if node_f1 == 0.0:
+            zero_match_count += 1
+        else:
+            overall_valid_precisions.append(
+                node_precision
+            )
+            overall_valid_recalls.append(
+                node_recall
+            )
+            overall_valid_f1s.append(
+                node_f1
+            )
 
-        node_recalls.append(
-            node_metrics["recall"]
-        )
+        total_count += 1
 
-        node_f1s.append(
-            node_metrics["f1"]
-        )
+        ########################################
+        # is_error=False
+        ########################################
+        if is_error == False:
+            normal_precisions.append(
+                node_precision
+            )
+            normal_recalls.append(
+                node_recall
+            )
+            normal_f1s.append(
+                node_f1
+            )
 
-        edge_precisions.append(
-            edge_metrics["precision"]
-        )
+            if node_f1 == 1.0:
+                normal_exact_count += 1
 
-        edge_recalls.append(
-            edge_metrics["recall"]
-        )
+            if node_f1 == 0.0:
+                normal_zero_count += 1
+            else:
+                normal_valid_precisions.append(
+                    node_precision
+                )
+                normal_valid_recalls.append(
+                    node_recall
+                )
+                normal_valid_f1s.append(
+                    node_f1
+                )
 
-        edge_f1s.append(
-            edge_metrics["f1"]
-        )
+            normal_count += 1
 
-        path_similarities.append(
-            path_similarity
-        )
+        ########################################
+        # is_error=True
+        ########################################
+        else:
+            error_precisions.append(
+                node_precision
+            )
+            error_recalls.append(
+                node_recall
+            )
+            error_f1s.append(
+                node_f1
+            )
 
-        valid_count += 1
+            if node_f1 == 1.0:
+                error_exact_count += 1
 
-    print("=" * 50)
-    print("Samples:", valid_count)
-    print("=" * 50)
+            if node_f1 == 0.0:
+                error_zero_count += 1
+            else:
+                error_valid_precisions.append(
+                    node_precision
+                )
+                error_valid_recalls.append(
+                    node_recall
+                )
+                error_valid_f1s.append(
+                    node_f1
+                )
 
-    print("Node Coverage:",
-          sum(node_coverages) / valid_count)
+            error_count += 1
+
+    ########################################
+    # Overall Output
+    ########################################
+    print("=" * 60)
+    print("Overall")
+    print("=" * 60)
+
+    print("Samples:",
+          total_count)
 
     print("Node Precision:",
-          sum(node_precisions) / valid_count)
+          sum(node_precisions) / total_count)
 
     print("Node Recall:",
-          sum(node_recalls) / valid_count)
+          sum(node_recalls) / total_count)
 
     print("Node F1:",
-          sum(node_f1s) / valid_count)
+          sum(node_f1s) / total_count)
+
+    print("Exact Match Ratio:",
+          exact_match_count / total_count)
+
+    print("Zero Match Ratio:",
+          zero_match_count / total_count)
 
     print()
 
-    print("Edge Precision:",
-          sum(edge_precisions) / valid_count)
+    print("Remove Zero-Match Samples:")
 
-    print("Edge Recall:",
-          sum(edge_recalls) / valid_count)
+    if len(overall_valid_f1s) > 0:
+        print("Precision:",
+              sum(overall_valid_precisions)
+              / len(overall_valid_precisions))
 
-    print("Edge F1:",
-          sum(edge_f1s) / valid_count)
+        print("Recall:",
+              sum(overall_valid_recalls)
+              / len(overall_valid_recalls))
+
+        print("F1:",
+              sum(overall_valid_f1s)
+              / len(overall_valid_f1s))
 
     print()
 
-    print("Path Coverage Similarity:",
-          sum(path_similarities) / valid_count)
+    ########################################
+    # is_error=False Output
+    ########################################
+    print("=" * 60)
+    print("is_error=False")
+    print("=" * 60)
+
+    if normal_count > 0:
+        print("Samples:",
+              normal_count)
+
+        print("Node Precision:",
+              sum(normal_precisions)
+              / normal_count)
+
+        print("Node Recall:",
+              sum(normal_recalls)
+              / normal_count)
+
+        print("Node F1:",
+              sum(normal_f1s)
+              / normal_count)
+
+        print("Exact Match Ratio:",
+              normal_exact_count
+              / normal_count)
+
+        print("Zero Match Ratio:",
+              normal_zero_count
+              / normal_count)
+
+        print()
+
+        print("Remove Zero-Match Samples:")
+
+        if len(normal_valid_f1s) > 0:
+            print("Precision:",
+                  sum(normal_valid_precisions)
+                  / len(normal_valid_precisions))
+
+            print("Recall:",
+                  sum(normal_valid_recalls)
+                  / len(normal_valid_recalls))
+
+            print("F1:",
+                  sum(normal_valid_f1s)
+                  / len(normal_valid_f1s))
+
+    print()
+
+    ########################################
+    # is_error=True Output
+    ########################################
+    print("=" * 60)
+    print("is_error=True")
+    print("=" * 60)
+
+    if error_count > 0:
+        print("Samples:",
+              error_count)
+
+        print("Node Precision:",
+              sum(error_precisions)
+              / error_count)
+
+        print("Node Recall:",
+              sum(error_recalls)
+              / error_count)
+
+        print("Node F1:",
+              sum(error_f1s)
+              / error_count)
+
+        print("Exact Match Ratio:",
+              error_exact_count
+              / error_count)
+
+        print("Zero Match Ratio:",
+              error_zero_count
+              / error_count)
+
+        print()
+
+        print("Remove Zero-Match Samples:")
+
+        if len(error_valid_f1s) > 0:
+            print("Precision:",
+                  sum(error_valid_precisions)
+                  / len(error_valid_precisions))
+
+            print("Recall:",
+                  sum(error_valid_recalls)
+                  / len(error_valid_recalls))
+
+            print("F1:",
+                  sum(error_valid_f1s)
+                  / len(error_valid_f1s))
 
 
 ########################################
