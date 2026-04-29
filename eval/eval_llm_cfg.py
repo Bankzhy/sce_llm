@@ -145,7 +145,6 @@ def generate_cfg(code):
     )
 
     cfg = result.split("CFG:")[-1].strip()
-    print(cfg)
     return cfg
 
 def load_test_data():
@@ -167,6 +166,7 @@ def evaluate():
     for index, example in enumerate(examples):
         if index == 0:
             continue
+        print(f"predicting....{index}")
         generated_cfg = generate_cfg(example[0])
         rows.append(
             {
