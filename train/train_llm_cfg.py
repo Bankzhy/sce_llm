@@ -17,7 +17,8 @@ max_seq_length = 2048
 dtype = None
 load_in_4bit = True
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "unsloth/codellama-7b-bnb-4bit",
+    # model_name = "unsloth/codellama-7b-bnb-4bit",
+    model_name= "unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit",
     max_seq_length = max_seq_length,
     dtype = dtype,
     load_in_4bit = load_in_4bit,
@@ -196,9 +197,11 @@ if __name__ == '__main__':
     trainer.train()
 
     # 保存微调模型
-    model.save_pretrained("lora_model_1")
-    tokenizer.save_pretrained("lora_model_1")
+    # model.save_pretrained("lora_model_1")
+    # tokenizer.save_pretrained("lora_model_1")
+    model.save_pretrained("lora_model_qwen_coder")
+    tokenizer.save_pretrained("lora_model_qwen_coder")
 
     # 合并模型，保存为16位hf
-    model.save_pretrained_merged("outputs", tokenizer, save_method="merged_16bit", )
+    # model.save_pretrained_merged("outputs", tokenizer, save_method="merged_16bit", )
 
