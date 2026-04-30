@@ -180,7 +180,7 @@ def evaluate():
             }
         )
     # ---- Write Result CSV ----
-    with open("predict.csv", mode="w", newline="", encoding="utf-8") as f:
+    with open("predict_codellama.csv", mode="w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["code", "cfg", "lang", "is_error", "predict"])
         writer.writeheader()
         writer.writerows(rows)
