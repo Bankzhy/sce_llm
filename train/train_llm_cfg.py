@@ -20,7 +20,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     # model_name = "unsloth/codellama-7b-bnb-4bit",
     # model_name= "unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit",
     # model_name= "deepseek-ai/deepseek-coder-6.7b-instruct",
-    model_name="unsloth/Qwen3.5-9B",
+    # model_name="unsloth/Qwen3.5-9B",
+    model_name="unsloth/gemma-4-E4B-it-unsloth-bnb-4bit",
     max_seq_length = max_seq_length,
     dtype = dtype,
     load_in_4bit = load_in_4bit,
@@ -208,8 +209,8 @@ if __name__ == '__main__':
     # model.save_pretrained("lora_model_deepseek_coder")
     # tokenizer.save_pretrained("lora_model_deepseek_coder")
 
-    model.save_pretrained("lora_model_qwen3.5")
-    tokenizer.save_pretrained("lora_model_qwen3.5")
+    model.save_pretrained("lora_model_gemma4")
+    tokenizer.save_pretrained("lora_model_gemma4")
 
     # 合并模型，保存为16位hf
     # model.save_pretrained_merged("outputs", tokenizer, save_method="merged_16bit", )
