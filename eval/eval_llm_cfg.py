@@ -14,7 +14,7 @@ from transformers import TextStreamer
 max_seq_length = 4096
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name=r"/root/autodl-tmp/sce_llm/train/codegemma-it",   # 你的训练结果目录
+    model_name=r"/root/autodl-tmp/sce_llm/train/unsloth/codegemma-it",   # 你的训练结果目录
     max_seq_length=max_seq_length,
     dtype=None,
     load_in_4bit=True,
