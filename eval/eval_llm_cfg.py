@@ -170,7 +170,7 @@ def evaluate():
             continue
         print(index)
         generated_cfg = generate_cfg(example[0])
-        if index < 5:
+        if index < 15:
             print(generated_cfg)
         rows.append(
             {
