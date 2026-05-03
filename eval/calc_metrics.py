@@ -1,19 +1,16 @@
 import re
-import ast
 import pandas as pd
 from difflib import SequenceMatcher
 
 
-########################################
-# 配置
-########################################
-
 NODE_SIM_THRESHOLD = 0.95
 
 
-########################################
-# 文本相似度
-########################################
+def normalize_text(text):
+    text = str(text).strip()
+    text = re.sub(r'\s+', ' ', text)
+    return text
+
 
 def text_similarity(a, b):
     return SequenceMatcher(
@@ -23,78 +20,33 @@ def text_similarity(a, b):
     ).ratio()
 
 
-def normalize_text(text):
-    text = text.strip()
-    text = re.sub(r'\s+', ' ', text)
-    return text
-
-
-########################################
-# 解析CFG节点
-########################################
-
 def parse_nodes(cfg_text):
-    """
-    兼容：
-    1[label="xxx", shape=rectangle]
-    1[label=xxx, shape=rectangle]
-    """
-
     if not isinstance(cfg_text, str):
         return {}
 
     pattern = r'(\d+)\s*\[\s*label=(.*?)\s*,\s*shape='
-
-    matches = re.findall(
-        pattern,
-        cfg_text,
-        re.DOTALL
-    )
+    matches = re.findall(pattern, cfg_text, re.DOTALL)
 
     nodes = {}
-
     for node_id, label in matches:
         label = label.strip()
-
         if label.startswith('"') and label.endswith('"'):
             label = label[1:-1]
-
         nodes[node_id] = normalize_text(label)
 
     return nodes
 
 
-########################################
-# 解析CFG边
-########################################
-
 def parse_edges(cfg_text):
-    """
-    解析:
-    1->2
-    """
-
     if not isinstance(cfg_text, str):
         return set()
 
     pattern = r'(\d+)\s*->\s*(\d+)'
-
     matches = re.findall(pattern, cfg_text)
-
     return set(matches)
 
 
-########################################
-# 节点匹配（模糊匹配）
-########################################
-
 def match_nodes(pred_nodes, gt_nodes):
-    """
-    基于label相似度匹配节点
-    返回:
-    matched_pairs = [(pred_id, gt_id)]
-    """
-
     matched_pairs = []
     used_gt = set()
 
@@ -106,67 +58,37 @@ def match_nodes(pred_nodes, gt_nodes):
             if gt_id in used_gt:
                 continue
 
-            score = text_similarity(
-                pred_label,
-                gt_label
-            )
+            score = text_similarity(pred_label, gt_label)
 
             if score > best_score:
                 best_score = score
                 best_match = gt_id
 
-        if (
-            best_match is not None
-            and best_score >= NODE_SIM_THRESHOLD
-        ):
-            matched_pairs.append(
-                (pred_id, best_match)
-            )
+        if best_match is not None and best_score >= NODE_SIM_THRESHOLD:
+            matched_pairs.append((pred_id, best_match))
             used_gt.add(best_match)
 
     return matched_pairs
 
 
-########################################
-# 节点指标
-########################################
-
 def compute_node_metrics(pred_cfg, gt_cfg):
     pred_nodes = parse_nodes(pred_cfg)
     gt_nodes = parse_nodes(gt_cfg)
 
-    matched_pairs = match_nodes(
-        pred_nodes,
-        gt_nodes
-    )
+    matched_pairs = match_nodes(pred_nodes, gt_nodes)
 
-    matched_pred = len(matched_pairs)
-
+    matched_count = len(matched_pairs)
     pred_total = len(pred_nodes)
     gt_total = len(gt_nodes)
 
-    coverage = (
-        matched_pred / gt_total
-        if gt_total > 0 else 0
-    )
-
-    precision = (
-        matched_pred / pred_total
-        if pred_total > 0 else 0
-    )
-
-    recall = (
-        matched_pred / gt_total
-        if gt_total > 0 else 0
-    )
-
+    precision = matched_count / pred_total if pred_total > 0 else 0
+    recall = matched_count / gt_total if gt_total > 0 else 0
     f1 = (
         2 * precision * recall / (precision + recall)
         if precision + recall > 0 else 0
     )
 
     return {
-        "coverage": coverage,
         "precision": precision,
         "recall": recall,
         "f1": f1,
@@ -174,15 +96,7 @@ def compute_node_metrics(pred_cfg, gt_cfg):
     }
 
 
-########################################
-# 边指标
-########################################
-
-def compute_edge_metrics(
-    pred_cfg,
-    gt_cfg,
-    matched_pairs
-):
+def compute_edge_metrics(pred_cfg, gt_cfg, matched_pairs):
     pred_edges = parse_edges(pred_cfg)
     gt_edges = parse_edges(gt_cfg)
 
@@ -202,9 +116,7 @@ def compute_edge_metrics(
                 )
             )
 
-    tp = len(
-        mapped_pred_edges & gt_edges
-    )
+    tp = len(mapped_pred_edges & gt_edges)
 
     precision = (
         tp / len(mapped_pred_edges)
@@ -217,8 +129,7 @@ def compute_edge_metrics(
     )
 
     f1 = (
-        2 * precision * recall /
-        (precision + recall)
+        2 * precision * recall / (precision + recall)
         if precision + recall > 0 else 0
     )
 
@@ -229,409 +140,171 @@ def compute_edge_metrics(
     }
 
 
-########################################
-# 枚举路径
-########################################
-
-def build_graph(edges):
-    graph = {}
-
-    for src, dst in edges:
-        graph.setdefault(src, []).append(dst)
-
-    return graph
+def mean(values):
+    return sum(values) / len(values) if len(values) > 0 else 0
 
 
-def dfs_paths(
-    graph,
-    node,
-    path,
-    paths,
-    visited,
-    max_depth=30
-):
-    if len(path) > max_depth:
-        return
+def print_metrics(title, data):
+    print("=" * 60)
+    print(title)
+    print("=" * 60)
 
-    if node not in graph:
-        paths.add(tuple(path))
-        return
+    print("Samples:", data["count"])
 
-    for nxt in graph[node]:
-        if (node, nxt) in visited:
-            continue
+    print("Node Precision:", mean(data["node_p"]))
+    print("Node Recall:", mean(data["node_r"]))
+    print("Node F1:", mean(data["node_f1"]))
 
-        dfs_paths(
-            graph,
-            nxt,
-            path + [nxt],
-            paths,
-            visited | {(node, nxt)},
-            max_depth
-        )
+    print("Edge Precision:", mean(data["edge_p"]))
+    print("Edge Recall:", mean(data["edge_r"]))
+    print("Edge F1:", mean(data["edge_f1"]))
 
+    print("Node Exact Match Ratio:",
+          data["node_exact"] / data["count"]
+          if data["count"] > 0 else 0)
 
-def extract_paths(cfg_text):
-    edges = parse_edges(cfg_text)
+    print("Node Zero Match Ratio:",
+          data["node_zero"] / data["count"]
+          if data["count"] > 0 else 0)
 
-    if not edges:
-        return set()
+    print("Edge Exact Match Ratio:",
+          data["edge_exact"] / data["count"]
+          if data["count"] > 0 else 0)
 
-    graph = build_graph(edges)
+    print("Edge Zero Match Ratio:",
+          data["edge_zero"] / data["count"]
+          if data["count"] > 0 else 0)
 
-    all_nodes = set()
-    child_nodes = set()
+    print()
+    print("Remove Node Zero-Match Samples:")
 
-    for src, dst in edges:
-        all_nodes.add(src)
-        all_nodes.add(dst)
-        child_nodes.add(dst)
+    print("Node Precision:", mean(data["valid_node_p"]))
+    print("Node Recall:", mean(data["valid_node_r"]))
+    print("Node F1:", mean(data["valid_node_f1"]))
 
-    roots = all_nodes - child_nodes
+    print("Edge Precision:", mean(data["valid_edge_p"]))
+    print("Edge Recall:", mean(data["valid_edge_r"]))
+    print("Edge F1:", mean(data["valid_edge_f1"]))
 
-    paths = set()
-
-    for root in roots:
-        dfs_paths(
-            graph,
-            root,
-            [root],
-            paths,
-            set()
-        )
-
-    return paths
+    print()
 
 
-########################################
-# Path Coverage Similarity
-########################################
+def empty_data():
+    return {
+        "count": 0,
 
-def compute_path_similarity(
-    pred_cfg,
-    gt_cfg
-):
-    pred_paths = extract_paths(pred_cfg)
-    gt_paths = extract_paths(gt_cfg)
+        "node_p": [],
+        "node_r": [],
+        "node_f1": [],
 
-    union = pred_paths | gt_paths
+        "edge_p": [],
+        "edge_r": [],
+        "edge_f1": [],
 
-    if len(union) == 0:
-        return 0
+        "valid_node_p": [],
+        "valid_node_r": [],
+        "valid_node_f1": [],
 
-    intersection = pred_paths & gt_paths
+        "valid_edge_p": [],
+        "valid_edge_r": [],
+        "valid_edge_f1": [],
 
-    return len(intersection) / len(union)
+        "node_exact": 0,
+        "node_zero": 0,
+
+        "edge_exact": 0,
+        "edge_zero": 0,
+    }
 
 
-########################################
-# 总评估
-########################################
+def update_data(data, node_metrics, edge_metrics):
+    node_p = node_metrics["precision"]
+    node_r = node_metrics["recall"]
+    node_f1 = node_metrics["f1"]
+
+    edge_p = edge_metrics["precision"]
+    edge_r = edge_metrics["recall"]
+    edge_f1 = edge_metrics["f1"]
+
+    data["count"] += 1
+
+    data["node_p"].append(node_p)
+    data["node_r"].append(node_r)
+    data["node_f1"].append(node_f1)
+
+    data["edge_p"].append(edge_p)
+    data["edge_r"].append(edge_r)
+    data["edge_f1"].append(edge_f1)
+
+    if node_f1 == 1.0:
+        data["node_exact"] += 1
+
+    if node_f1 == 0.0:
+        data["node_zero"] += 1
+    else:
+        data["valid_node_p"].append(node_p)
+        data["valid_node_r"].append(node_r)
+        data["valid_node_f1"].append(node_f1)
+
+        data["valid_edge_p"].append(edge_p)
+        data["valid_edge_r"].append(edge_r)
+        data["valid_edge_f1"].append(edge_f1)
+
+    if edge_f1 == 1.0:
+        data["edge_exact"] += 1
+
+    if edge_f1 == 0.0:
+        data["edge_zero"] += 1
+
+
+def to_bool(value):
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+
+    return bool(value)
+
+
+def clean_prediction(text):
+    text = str(text).strip()
+    text = text.replace("Ċ", "\n")
+    text = text.replace("Ġ", " ")
+    return text
+
 
 def evaluate(csv_path):
     df = pd.read_csv(csv_path)
 
-    ########################################
-    # Overall
-    ########################################
-    node_precisions = []
-    node_recalls = []
-    node_f1s = []
+    overall_data = empty_data()
+    normal_data = empty_data()
+    error_data = empty_data()
 
-    exact_match_count = 0
-    zero_match_count = 0
-    total_count = 0
-
-    # overall remove zero-match
-    overall_valid_precisions = []
-    overall_valid_recalls = []
-    overall_valid_f1s = []
-
-    ########################################
-    # is_error=False
-    ########################################
-    normal_precisions = []
-    normal_recalls = []
-    normal_f1s = []
-
-    normal_exact_count = 0
-    normal_zero_count = 0
-    normal_count = 0
-
-    # normal remove zero-match
-    normal_valid_precisions = []
-    normal_valid_recalls = []
-    normal_valid_f1s = []
-
-    ########################################
-    # is_error=True
-    ########################################
-    error_precisions = []
-    error_recalls = []
-    error_f1s = []
-
-    error_exact_count = 0
-    error_zero_count = 0
-    error_count = 0
-
-    # error remove zero-match
-    error_valid_precisions = []
-    error_valid_recalls = []
-    error_valid_f1s = []
-
-    ########################################
-    # Iterate samples
-    ########################################
     for _, row in df.iterrows():
         gt_cfg = str(row["cfg"]).strip()
-        pred_cfg = str(row["predict"]).strip()
-        # pred_cfg = pred_cfg.replace("Ċ", "\n").replace("Ġ", " ")
-        is_error = row["is_error"]
+        pred_cfg = clean_prediction(row["predict"])
+        is_error = to_bool(row["is_error"])
 
-        node_metrics = compute_node_metrics(
+        node_metrics = compute_node_metrics(pred_cfg, gt_cfg)
+
+        edge_metrics = compute_edge_metrics(
             pred_cfg,
-            gt_cfg
+            gt_cfg,
+            node_metrics["matched_pairs"]
         )
 
-        node_precision = node_metrics["precision"]
-        node_recall = node_metrics["recall"]
-        node_f1 = node_metrics["f1"]
+        update_data(overall_data, node_metrics, edge_metrics)
 
-        ########################################
-        # Overall
-        ########################################
-        node_precisions.append(node_precision)
-        node_recalls.append(node_recall)
-        node_f1s.append(node_f1)
-
-        if node_f1 == 1.0:
-            exact_match_count += 1
-
-        if node_f1 == 0.0:
-            zero_match_count += 1
+        if is_error is False:
+            update_data(normal_data, node_metrics, edge_metrics)
         else:
-            overall_valid_precisions.append(
-                node_precision
-            )
-            overall_valid_recalls.append(
-                node_recall
-            )
-            overall_valid_f1s.append(
-                node_f1
-            )
+            update_data(error_data, node_metrics, edge_metrics)
 
-        total_count += 1
+    print_metrics("Overall", overall_data)
+    print_metrics("is_error=False", normal_data)
+    print_metrics("is_error=True", error_data)
 
-        ########################################
-        # is_error=False
-        ########################################
-        if is_error == False:
-            normal_precisions.append(
-                node_precision
-            )
-            normal_recalls.append(
-                node_recall
-            )
-            normal_f1s.append(
-                node_f1
-            )
-
-            if node_f1 == 1.0:
-                normal_exact_count += 1
-
-            if node_f1 == 0.0:
-                normal_zero_count += 1
-            else:
-                normal_valid_precisions.append(
-                    node_precision
-                )
-                normal_valid_recalls.append(
-                    node_recall
-                )
-                normal_valid_f1s.append(
-                    node_f1
-                )
-
-            normal_count += 1
-
-        ########################################
-        # is_error=True
-        ########################################
-        else:
-            error_precisions.append(
-                node_precision
-            )
-            error_recalls.append(
-                node_recall
-            )
-            error_f1s.append(
-                node_f1
-            )
-
-            if node_f1 == 1.0:
-                error_exact_count += 1
-
-            if node_f1 == 0.0:
-                error_zero_count += 1
-            else:
-                error_valid_precisions.append(
-                    node_precision
-                )
-                error_valid_recalls.append(
-                    node_recall
-                )
-                error_valid_f1s.append(
-                    node_f1
-                )
-
-            error_count += 1
-
-    ########################################
-    # Overall Output
-    ########################################
-    print("=" * 60)
-    print("Overall")
-    print("=" * 60)
-
-    print("Samples:",
-          total_count)
-
-    print("Node Precision:",
-          sum(node_precisions) / total_count)
-
-    print("Node Recall:",
-          sum(node_recalls) / total_count)
-
-    print("Node F1:",
-          sum(node_f1s) / total_count)
-
-    print("Exact Match Ratio:",
-          exact_match_count / total_count)
-
-    print("Zero Match Ratio:",
-          zero_match_count / total_count)
-
-    print()
-
-    print("Remove Zero-Match Samples:")
-
-    if len(overall_valid_f1s) > 0:
-        print("Precision:",
-              sum(overall_valid_precisions)
-              / len(overall_valid_precisions))
-
-        print("Recall:",
-              sum(overall_valid_recalls)
-              / len(overall_valid_recalls))
-
-        print("F1:",
-              sum(overall_valid_f1s)
-              / len(overall_valid_f1s))
-
-    print()
-
-    ########################################
-    # is_error=False Output
-    ########################################
-    print("=" * 60)
-    print("is_error=False")
-    print("=" * 60)
-
-    if normal_count > 0:
-        print("Samples:",
-              normal_count)
-
-        print("Node Precision:",
-              sum(normal_precisions)
-              / normal_count)
-
-        print("Node Recall:",
-              sum(normal_recalls)
-              / normal_count)
-
-        print("Node F1:",
-              sum(normal_f1s)
-              / normal_count)
-
-        print("Exact Match Ratio:",
-              normal_exact_count
-              / normal_count)
-
-        print("Zero Match Ratio:",
-              normal_zero_count
-              / normal_count)
-
-        print()
-
-        print("Remove Zero-Match Samples:")
-
-        if len(normal_valid_f1s) > 0:
-            print("Precision:",
-                  sum(normal_valid_precisions)
-                  / len(normal_valid_precisions))
-
-            print("Recall:",
-                  sum(normal_valid_recalls)
-                  / len(normal_valid_recalls))
-
-            print("F1:",
-                  sum(normal_valid_f1s)
-                  / len(normal_valid_f1s))
-
-    print()
-
-    ########################################
-    # is_error=True Output
-    ########################################
-    print("=" * 60)
-    print("is_error=True")
-    print("=" * 60)
-
-    if error_count > 0:
-        print("Samples:",
-              error_count)
-
-        print("Node Precision:",
-              sum(error_precisions)
-              / error_count)
-
-        print("Node Recall:",
-              sum(error_recalls)
-              / error_count)
-
-        print("Node F1:",
-              sum(error_f1s)
-              / error_count)
-
-        print("Exact Match Ratio:",
-              error_exact_count
-              / error_count)
-
-        print("Zero Match Ratio:",
-              error_zero_count
-              / error_count)
-
-        print()
-
-        print("Remove Zero-Match Samples:")
-
-        if len(error_valid_f1s) > 0:
-            print("Precision:",
-                  sum(error_valid_precisions)
-                  / len(error_valid_precisions))
-
-            print("Recall:",
-                  sum(error_valid_recalls)
-                  / len(error_valid_recalls))
-
-            print("F1:",
-                  sum(error_valid_f1s)
-                  / len(error_valid_f1s))
-
-
-########################################
-# 运行
-########################################
 
 if __name__ == "__main__":
     evaluate("predict-phi-4.csv")

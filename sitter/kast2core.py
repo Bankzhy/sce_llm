@@ -211,7 +211,7 @@ class KASTParse:
             # print(node.type)
             # print(node.text.decode())
 
-            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
+            if node.type != self.BLOCK and node.type != self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 
@@ -249,7 +249,7 @@ class KASTParse:
             # print("======================")
             # print(node.type)
             # print(node.text.decode())
-            if node.type != self.BLOCK or node.type != self.STATEMENT_BLOCK:
+            if node.type != self.BLOCK and node.type != self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 
@@ -343,7 +343,7 @@ class KASTParse:
             # print(node.type)
             # print(node.text.decode())
             # new_sr_if_statement.word_list.append(node.text.decode())
-            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
+            if node.type != self.BLOCK and node.type != self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 
@@ -439,7 +439,7 @@ class KASTParse:
             # print("======================")
             # print(node.type)
             # print(node.text.decode())
-            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
+            if node.type != self.BLOCK and node.type != self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
             if node.type == self.PARENTHESIZED_EXPRESSION:
@@ -464,7 +464,7 @@ class KASTParse:
             # print(node.type)
             # print(node.text.decode())
 
-            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
+            if node.type != self.BLOCK and node.type != self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 

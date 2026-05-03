@@ -234,9 +234,20 @@ def parse_nodes(cfg_text):
 
 def parse_edges(cfg_text):
     """
-    解析:
+    解析 CFG 边，兼容：
     1->2
     1 -> 2
+    1->2;
+    1->2 3->1
+
+    DeepSeek 粘连格式：
+    1->23->13->41->3
+
+    等价于：
+    1->2
+    3->1
+    3->4
+    1->3
     """
 
     if not isinstance(cfg_text, str):
@@ -244,14 +255,123 @@ def parse_edges(cfg_text):
 
     cfg_text = normalize_cfg_text(cfg_text)
 
-    pattern = r"(\d+)\s*->\s*(\d+)"
-
-    matches = re.findall(pattern, cfg_text)
-
-    return set(
-        (src.strip(), dst.strip())
-        for src, dst in matches
+    # 获取 CFG 中合法 node id
+    node_ids = set(
+        re.findall(
+            r"\b(\d+)\s*\[",
+            cfg_text
+        )
     )
+
+    # 去掉节点定义，避免 label 里的内容影响 edge 解析
+    edge_text = re.sub(
+        r"\b\d+\s*\[.*?\]",
+        " ",
+        cfg_text,
+        flags=re.DOTALL
+    )
+
+    def split_compact_token(token):
+        """
+        将粘连 token 拆成两个合法 node id。
+
+        例如：
+        token = "23" -> ("2", "3")
+        token = "1011" -> ("10", "11")
+        """
+        candidates = []
+
+        for i in range(1, len(token)):
+            left = token[:i]
+            right = token[i:]
+
+            if left in node_ids and right in node_ids:
+                candidates.append((left, right))
+
+        if not candidates:
+            return None
+
+        # 优先选择左边较短的拆分，适合 1,2,3,... 这种节点编号
+        candidates.sort(key=lambda x: (len(x[0]), len(x[1])))
+
+        return candidates[0]
+
+    edges = set()
+
+    # 找所有连续边表达式：
+    # 1->2
+    # 1->2->3
+    # 1->23->13->41->3
+    chain_pattern = r"\d+(?:\s*->\s*\d+)+"
+
+    chains = re.findall(
+        chain_pattern,
+        edge_text
+    )
+
+    for chain in chains:
+        parts = re.split(
+            r"\s*->\s*",
+            chain.strip()
+        )
+
+        parts = [
+            p.strip()
+            for p in parts
+            if p.strip()
+        ]
+
+        if len(parts) < 2:
+            continue
+
+        # 判断是否为 DeepSeek 粘连格式
+        # 例如：
+        # ["1", "23", "13", "41", "3"]
+        compact_possible = False
+
+        if len(parts) >= 3:
+            compact_possible = True
+
+            for middle_token in parts[1:-1]:
+                if split_compact_token(middle_token) is None:
+                    compact_possible = False
+                    break
+
+        if compact_possible:
+            src = parts[0]
+
+            for middle_token in parts[1:-1]:
+                split_result = split_compact_token(middle_token)
+
+                if split_result is None:
+                    break
+
+                dst, next_src = split_result
+
+                if src in node_ids and dst in node_ids:
+                    edges.add((src, dst))
+
+                src = next_src
+
+            final_dst = parts[-1]
+
+            if src in node_ids and final_dst in node_ids:
+                edges.add((src, final_dst))
+
+        else:
+            # 普通 chain：
+            # 1->2->3 解析为 1->2, 2->3
+            for i in range(len(parts) - 1):
+                src = parts[i]
+                dst = parts[i + 1]
+
+                if node_ids:
+                    if src in node_ids and dst in node_ids:
+                        edges.add((src, dst))
+                else:
+                    edges.add((src, dst))
+
+    return edges
 
 
 ########################################
@@ -530,6 +650,10 @@ def evaluate(csv_path):
     overall_valid_recalls = []
     overall_valid_f1s = []
 
+    overall_valid_edge_precisions = []
+    overall_valid_edge_recalls = []
+    overall_valid_edge_f1s = []
+
     ########################################
     # is_error=False
     ########################################
@@ -549,6 +673,10 @@ def evaluate(csv_path):
     normal_valid_recalls = []
     normal_valid_f1s = []
 
+    normal_valid_edge_precisions = []
+    normal_valid_edge_recalls = []
+    normal_valid_edge_f1s = []
+
     ########################################
     # is_error=True
     ########################################
@@ -567,6 +695,10 @@ def evaluate(csv_path):
     error_valid_precisions = []
     error_valid_recalls = []
     error_valid_f1s = []
+
+    error_valid_edge_precisions = []
+    error_valid_edge_recalls = []
+    error_valid_edge_f1s = []
 
     ########################################
     # Iterate samples
@@ -627,6 +759,16 @@ def evaluate(csv_path):
                 node_f1
             )
 
+            overall_valid_edge_precisions.append(
+                edge_precision
+            )
+            overall_valid_edge_recalls.append(
+                edge_recall
+            )
+            overall_valid_edge_f1s.append(
+                edge_f1
+            )
+
         total_count += 1
 
         ########################################
@@ -643,9 +785,15 @@ def evaluate(csv_path):
                 node_f1
             )
 
-            normal_edge_precisions.append(edge_precision)
-            normal_edge_recalls.append(edge_recall)
-            normal_edge_f1s.append(edge_f1)
+            normal_edge_precisions.append(
+                edge_precision
+            )
+            normal_edge_recalls.append(
+                edge_recall
+            )
+            normal_edge_f1s.append(
+                edge_f1
+            )
 
             if node_f1 == 1.0:
                 normal_exact_count += 1
@@ -661,6 +809,16 @@ def evaluate(csv_path):
                 )
                 normal_valid_f1s.append(
                     node_f1
+                )
+
+                normal_valid_edge_precisions.append(
+                    edge_precision
+                )
+                normal_valid_edge_recalls.append(
+                    edge_recall
+                )
+                normal_valid_edge_f1s.append(
+                    edge_f1
                 )
 
             normal_count += 1
@@ -679,9 +837,15 @@ def evaluate(csv_path):
                 node_f1
             )
 
-            error_edge_precisions.append(edge_precision)
-            error_edge_recalls.append(edge_recall)
-            error_edge_f1s.append(edge_f1)
+            error_edge_precisions.append(
+                edge_precision
+            )
+            error_edge_recalls.append(
+                edge_recall
+            )
+            error_edge_f1s.append(
+                edge_f1
+            )
 
             if node_f1 == 1.0:
                 error_exact_count += 1
@@ -697,6 +861,16 @@ def evaluate(csv_path):
                 )
                 error_valid_f1s.append(
                     node_f1
+                )
+
+                error_valid_edge_precisions.append(
+                    edge_precision
+                )
+                error_valid_edge_recalls.append(
+                    edge_recall
+                )
+                error_valid_edge_f1s.append(
+                    edge_f1
                 )
 
             error_count += 1
@@ -739,14 +913,23 @@ def evaluate(csv_path):
 
     print("Remove Zero-Match Samples:")
 
-    print("Precision:",
+    print("Node Precision:",
           safe_avg(overall_valid_precisions))
 
-    print("Recall:",
+    print("Node Recall:",
           safe_avg(overall_valid_recalls))
 
-    print("F1:",
+    print("Node F1:",
           safe_avg(overall_valid_f1s))
+
+    print("Edge Precision:",
+          safe_avg(overall_valid_edge_precisions))
+
+    print("Edge Recall:",
+          safe_avg(overall_valid_edge_recalls))
+
+    print("Edge F1:",
+          safe_avg(overall_valid_edge_f1s))
 
     print()
 
@@ -789,14 +972,23 @@ def evaluate(csv_path):
 
         print("Remove Zero-Match Samples:")
 
-        print("Precision:",
+        print("Node Precision:",
               safe_avg(normal_valid_precisions))
 
-        print("Recall:",
+        print("Node Recall:",
               safe_avg(normal_valid_recalls))
 
-        print("F1:",
+        print("Node F1:",
               safe_avg(normal_valid_f1s))
+
+        print("Edge Precision:",
+              safe_avg(normal_valid_edge_precisions))
+
+        print("Edge Recall:",
+              safe_avg(normal_valid_edge_recalls))
+
+        print("Edge F1:",
+              safe_avg(normal_valid_edge_f1s))
 
     print()
 
@@ -839,14 +1031,41 @@ def evaluate(csv_path):
 
         print("Remove Zero-Match Samples:")
 
-        print("Precision:",
+        print("Node Precision:",
               safe_avg(error_valid_precisions))
 
-        print("Recall:",
+        print("Node Recall:",
               safe_avg(error_valid_recalls))
 
-        print("F1:",
+        print("Node F1:",
               safe_avg(error_valid_f1s))
+
+        print("Edge Precision:",
+              safe_avg(error_valid_edge_precisions))
+
+        print("Edge Recall:",
+              safe_avg(error_valid_edge_recalls))
+
+        print("Edge F1:",
+              safe_avg(error_valid_edge_f1s))
+
+
+########################################
+# 测试 parse_edges，可选
+########################################
+
+def test_parse_edges():
+    test_cfg = """
+    digraph G {
+    1[label=for word in words:,shape=hexagon]
+    2[label=return "",shape=parallelogram]
+    3[label=if word==word[::-1]:,shape=diamond]
+    4[label=return word,shape=parallelogram]
+    1->23->13->41->3
+    }
+    """
+
+    print(parse_edges(test_cfg))
 
 
 ########################################
@@ -854,4 +1073,7 @@ def evaluate(csv_path):
 ########################################
 
 if __name__ == "__main__":
+    # 如需测试边解析，取消下面这一行注释：
+    # test_parse_edges()
+
     evaluate("predict_deepseek_coder.csv")
