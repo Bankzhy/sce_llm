@@ -14,7 +14,7 @@ from transformers import TextStreamer
 max_seq_length = 4096
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name=r"/root/autodl-tmp/sce_llm/train/lora_model_1",   # 你的训练结果目录
+    model_name=r"/root/autodl-tmp/sce_llm/train/lora_model_deepseek_coder",   # 你的训练结果目录
     max_seq_length=max_seq_length,
     dtype=None,
     load_in_4bit=True,
@@ -182,7 +182,7 @@ def evaluate():
             }
         )
     # ---- Write Result CSV ----
-    with open("codellama-JS.csv", mode="w", newline="", encoding="utf-8") as f:
+    with open("deepseek_coder-JS.csv", mode="w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["code", "cfg", "lang", "is_error", "predict"])
         writer.writeheader()
         writer.writerows(rows)
