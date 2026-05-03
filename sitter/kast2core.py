@@ -27,9 +27,12 @@ class KASTParse:
         self.CLASS_BODY = "class_body"
         self.FIELD_DECLARATION = "field_declaration"
         self.CONSTRUCTOR_DECLARATION = "constructor_declaration"
+        self.METHOD_DEFINITION = 'method_definition'
         self.METHOD_DECLARATION = "method_declaration"
         self.FUNCTION_DEFINITION = "function_definition"
+        self.FUNCTION_DECLARATION = "function_declaration"
         self.BLOCK = "block"
+        self.STATEMENT_BLOCK = "statement_block"
         self.FOR_STATEMENT = "for_statement"
         self.ENHANCED_FOR_STATEMENT = "enhanced_for_statement"
         self.MODIFIERS = "modifiers"
@@ -208,13 +211,13 @@ class KASTParse:
             # print(node.type)
             # print(node.text.decode())
 
-            if node.type != self.BLOCK:
+            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 
             if node.type == self.TYPE_IDENTIFIER or node.type == self.IDENTIFIER or node.type == ":":
                 new_sr_for_statement.end_condition.append(node.text.decode())
-            elif node.type == self.BLOCK:
+            elif node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 var_labels = self.fetch_mkg_var_name(word_list, mkg)
                 if dominate_vars is not None: var_labels = var_labels.extend(dominate_vars)
                 child_statement_list = self.parse_block(node, mkg, dominate_vars=var_labels)
@@ -246,7 +249,7 @@ class KASTParse:
             # print("======================")
             # print(node.type)
             # print(node.text.decode())
-            if node.type != self.BLOCK:
+            if node.type != self.BLOCK or node.type != self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 
@@ -260,7 +263,7 @@ class KASTParse:
                 # new_sr_for_statement.update = list(map(lambda n: n.text.decode(), node.children))
                 new_sr_for_statement.update = self.statement_node_to_word_list(node)
 
-            elif node.type == self.BLOCK:
+            elif node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 var_labels = self.fetch_mkg_var_name(word_list, mkg)
                 if dominate_vars is not None: var_labels = var_labels.extend(dominate_vars)
                 child_statement_list = self.parse_block(node, mkg, dominate_vars=var_labels)
@@ -284,7 +287,7 @@ class KASTParse:
             if node.type == self.CATCH_FORMAL_PARAMETER:
                 new_catch_block.catch_param = node.text.decode()
                 new_catch_block.word_list = self.statement_node_to_word_list(node)
-            elif node.type == self.BLOCK:
+            elif node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 new_catch_block.child_statement_list = self.parse_block(node, mkg)
         return new_catch_block
 
@@ -294,7 +297,7 @@ class KASTParse:
                 # print("======================")
                 # print(node.type)
                 # print(node.text)
-            if node.type == self.BLOCK:
+            if node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 statement_list = self.parse_block(node, mkg)
         return statement_list
 
@@ -310,7 +313,7 @@ class KASTParse:
             # print("======================")
             # print(node.type)
             # print(node.text.decode())
-            if node.type == self.BLOCK:
+            if node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 new_sr_try_statement.try_statement_list = self.parse_block(node, mkg, dominate_vars)
             elif node.type == self.CATCH_CLAUSE:
                 new_catch_block = self.parse_catch_block(node, mkg)
@@ -340,7 +343,7 @@ class KASTParse:
             # print(node.type)
             # print(node.text.decode())
             # new_sr_if_statement.word_list.append(node.text.decode())
-            if node.type != self.BLOCK:
+            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 
@@ -353,7 +356,7 @@ class KASTParse:
         if else_index != -1:
             pos_block_node = root_node.children[else_index-1]
             neg_block_node = root_node.children[else_index+1]
-            if pos_block_node.type == self.BLOCK:
+            if pos_block_node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 new_sr_if_statement.pos_statement_list = self.parse_block(pos_block_node, mkg, dominate_vars=var_labels)
             else:
                 new_sr_statement = SRStatement(
@@ -365,7 +368,7 @@ class KASTParse:
                 new_sr_statement.end_line = (node.end_point[0] + 1)
                 new_sr_if_statement.pos_statement_list = [new_sr_statement]
 
-            if neg_block_node.type == self.BLOCK:
+            if neg_block_node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 new_sr_if_statement.neg_statement_list = self.parse_block(neg_block_node, mkg, dominate_vars=var_labels)
             elif neg_block_node.type == self.IF_STATEMENT:
                 new_sr_if_statement.neg_statement_list = [self.parse_if_statement(neg_block_node, mkg, dominate_vars=var_labels)]
@@ -380,7 +383,7 @@ class KASTParse:
                 new_sr_if_statement.neg_statement_list = [new_sr_statement]
         else:
             pos_block_node = root_node.children[root_node.child_count -1]
-            if pos_block_node.type == self.BLOCK:
+            if pos_block_node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 new_sr_if_statement.pos_statement_list = self.parse_block(pos_block_node, mkg, dominate_vars=var_labels)
             else:
                 new_sr_statement = SRStatement(
@@ -436,7 +439,7 @@ class KASTParse:
             # print("======================")
             # print(node.type)
             # print(node.text.decode())
-            if node.type != self.BLOCK:
+            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
             if node.type == self.PARENTHESIZED_EXPRESSION:
@@ -461,7 +464,7 @@ class KASTParse:
             # print(node.type)
             # print(node.text.decode())
 
-            if node.type != self.BLOCK:
+            if node.type != self.BLOCK and self.STATEMENT_BLOCK:
                 result = self.statement_node_to_word_list(node)
                 local_word_list.extend(result)
 
@@ -470,7 +473,7 @@ class KASTParse:
                 new_sr_while_statement.end_condition = self.statement_node_to_word_list(node)
                 # new_sr_while_statement.word_list.append("while")
                 # new_sr_while_statement.word_list.extend(new_sr_while_statement.end_condition)
-            elif node.type == self.BLOCK:
+            elif node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 var_labels = self.fetch_mkg_var_name(word_list, mkg)
                 if dominate_vars is not None: var_labels = var_labels.extend(dominate_vars)
                 new_sr_while_statement.child_statement_list = self.parse_block(node, mkg, dominate_vars)
@@ -727,7 +730,7 @@ class KASTParse:
                     type_node, created = new_mkg.get_or_create_node(param.type, DATATYPE)
                     var_node, created = new_mkg.get_or_create_node(param.name, VAR_IDENTIFIER)
                     new_edge = new_mkg.get_or_create_edge(type_node, var_node, TYPE_OF)
-            elif node.type == self.BLOCK:
+            elif node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 new_sr_method.statement_list = self.parse_block(node, new_mkg)
             elif node.type == self.THROWS:
                 new_sr_method.throws = self.statement_node_to_word_list(node)
@@ -784,7 +787,7 @@ class KASTParse:
                     if "comment" in root_node.children[index - 1].type:
                         new_sr_method.comment = root_node.children[index - 1].text.decode()
                 method_list.append(new_sr_method)
-            elif node.type == self.FUNCTION_DEFINITION:
+            elif node.type == self.FUNCTION_DEFINITION or node.type == self.FUNCTION_DECLARATION or node.type == self.METHOD_DEFINITION:
                 new_sr_method = self.parse_method_node(node)
                 if index != 0:
                     if "comment" in root_node.children[index - 1].type:
@@ -812,7 +815,7 @@ class KASTParse:
                 new_sr_class.field_list = field_list
                 new_sr_class.method_list = method_list
                 new_sr_class.constructor_list = constructor_list
-            elif node.type == self.BLOCK:
+            elif node.type == self.BLOCK or self.STATEMENT_BLOCK:
                 field_list, method_list, constructor_list = self.parse_class_block(node)
                 new_sr_class.field_list = field_list
                 new_sr_class.method_list = method_list
@@ -850,6 +853,7 @@ class KASTParse:
                     if "comment" in root_node.children[index - 1].type:
                         new_sr_class.comment = root_node.children[index - 1].text.decode()
                 class_list.append(new_sr_class)
+
         # program_name_list = program_name.split("\\")
         # program_name = program_name_list[len(program_name_list)-1]
         new_sr_program = SRProgram(
