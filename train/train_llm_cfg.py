@@ -87,11 +87,9 @@ def convert_sample(code, cfg):
 
         Output Format:
         digraph <method_name> {{
-            0 [label="BEGIN", shape="oval"]
+            ...
             <id> [label="<statement>", shape="<shape>"]
             ...
-            <last_id> [label="END", shape="oval"]
-
             <from> -> <to>
             ...
         }}

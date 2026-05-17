@@ -307,4 +307,4 @@ def evaluate(csv_path):
 
 
 if __name__ == "__main__":
-    evaluate("Qwen-Coder-JS.csv")
+    evaluate("js/predict-llama3.2-JS.csv")
