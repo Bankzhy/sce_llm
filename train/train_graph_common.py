@@ -135,7 +135,7 @@ def parse_args(graph_type: str):
     task = TASKS[graph_type]
     parser = argparse.ArgumentParser(description=f"Fine-tune an LLM to generate {graph_type.upper()} graphs.")
     parser.add_argument("--train-file", default=str(task["default_train_file"]))
-    parser.add_argument("--model-name", default="unsloth/codegemma-7b-it-bnb-4bit")
+    parser.add_argument("--model-name", default="unsloth/codellama-7b-bnb-4bit")
     parser.add_argument("--output-dir", default=str(task["default_output_dir"]))
     parser.add_argument("--save-dir", default=str(task["default_save_dir"]))
     parser.add_argument("--max-seq-length", type=int, default=2048)
