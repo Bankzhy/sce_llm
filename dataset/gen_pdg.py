@@ -86,71 +86,239 @@ class PDGBuilder:
         return True
 
     def _create_data_dependency(self):
-        self._get_var_change_from_statement()
-        self._get_var_use_dependency()
+        real_nodes = [
+            node
+            for node in self.node_list
+            if getattr(node.sr_statement, "type", None) != "Fake"
+        ]
+        node_ids = {node.id for node in real_nodes}
+        definitions = {}
+        uses = {}
 
-    def _get_var_change_from_statement(self):
-        for node in self.node_list:
-            statement = node.sr_statement
-            if isinstance(statement, (SRIFStatement, SRFORStatement, SRWhileStatement)):
-                continue
-            if "=" not in statement.word_list:
-                continue
+        for node in real_nodes:
+            node_defs, node_uses = self._statement_defs_and_uses(node.sr_statement)
+            definitions[node.id] = node_defs
+            uses[node.id] = node_uses
 
-            for index, word in enumerate(statement.word_list):
-                if index == 0 or index + 1 >= len(statement.word_list):
-                    continue
-                if word == "=":
-                    var_change = statement.word_list[index - 1]
-                    self.var_change_list.setdefault(var_change, []).append(node)
+        predecessors = {node.id: set() for node in self.node_list}
+        for edge in self.flow_edge_list:
+            predecessors.setdefault(edge.target, set()).add(edge.source)
 
-    def _get_var_use_dependency(self):
-        for node in self.node_list:
-            word_list = node.sr_statement.to_node_word_list()
-            equal_index = word_list.index("=") if "=" in word_list else 0
-            for word in word_list[equal_index + 1 :]:
-                if word not in self.var_change_list:
-                    continue
-                var_change_node = self._get_nearest_dependency(
-                    node, sorted(self.var_change_list[word], key=lambda item: item.index)
+        in_sets = {node.id: set() for node in self.node_list}
+        out_sets = {node.id: set() for node in self.node_list}
+        changed = True
+        while changed:
+            changed = False
+            for node in sorted(self.node_list, key=lambda item: item.index):
+                incoming = set()
+                for predecessor in predecessors.get(node.id, set()):
+                    incoming.update(out_sets.get(predecessor, set()))
+
+                killed_variables = definitions.get(node.id, set())
+                outgoing = {
+                    definition
+                    for definition in incoming
+                    if definition[0] not in killed_variables
+                    or definition[1] == node.id
+                }
+                outgoing.update(
+                    (variable, node.id)
+                    for variable in killed_variables
                 )
-                if var_change_node is not None and var_change_node.id != node.id:
-                    self.dd_edge_list.append(PDGEdge(node.id, var_change_node.id, "data_dependence"))
 
-    def _get_nearest_dependency(self, var_use_node, var_change_list):
-        result = None
-        for var_change_node in var_change_list:
-            if var_use_node.index > var_change_node.index:
-                result = var_change_node
-        return result
+                if incoming != in_sets[node.id] or outgoing != out_sets[node.id]:
+                    in_sets[node.id] = incoming
+                    out_sets[node.id] = outgoing
+                    changed = True
+
+        dependencies = set()
+        for node in real_nodes:
+            for variable in uses[node.id]:
+                for defined_variable, definition_node_id in in_sets[node.id]:
+                    if (
+                        variable == defined_variable
+                        and definition_node_id in node_ids
+                        and definition_node_id != node.id
+                    ):
+                        dependencies.add((definition_node_id, node.id))
+
+        self.dd_edge_list = [
+            PDGEdge(source, target, "data_dependence")
+            for source, target in sorted(
+                dependencies,
+                key=lambda edge: (
+                    self._node_index(edge[0]),
+                    self._node_index(edge[1]),
+                ),
+            )
+        ]
+
+    def _node_index(self, node_id):
+        for node in self.node_list:
+            if node.id == node_id:
+                return node.index
+        return 0
+
+    @staticmethod
+    def _is_variable_token(token):
+        if not isinstance(token, str) or not re.match(r"^[A-Za-z_$][\w$]*$", token):
+            return False
+        return token not in {
+            "and", "as", "assert", "async", "await", "break", "case",
+            "catch", "class", "const", "continue", "def", "default", "del",
+            "do", "elif", "else", "enum", "except", "export", "extends",
+            "false", "False", "finally", "for", "from", "function", "if",
+            "implements", "import", "in", "instanceof", "interface", "lambda",
+            "let", "match", "new", "None", "null", "of", "or", "package",
+            "pass", "private", "protected", "public", "raise", "return",
+            "static", "super", "switch", "this", "throw", "throws", "true",
+            "True", "try", "var", "void", "while", "with", "yield",
+            "boolean", "byte", "char", "double", "float", "int", "long",
+            "short",
+        }
+
+    def _variables_in_tokens(self, tokens):
+        variables = set()
+        for index, token in enumerate(tokens):
+            if not self._is_variable_token(token):
+                continue
+            # A name immediately followed by '(' is a called method/function,
+            # not a variable use.
+            if index + 1 < len(tokens) and tokens[index + 1] == "(":
+                continue
+            variables.add(token)
+        return variables
+
+    def _statement_defs_and_uses(self, statement):
+        tokens = list(statement.word_list)
+        if not tokens:
+            return set(), set()
+
+        if isinstance(statement, SRFORStatement):
+            try:
+                for_index = tokens.index("for")
+                in_index = tokens.index("in", for_index + 1)
+            except ValueError:
+                return set(), self._variables_in_tokens(tokens)
+            definitions = self._variables_in_tokens(tokens[for_index + 1 : in_index])
+            header_end = tokens.index(":", in_index + 1) if ":" in tokens[in_index + 1 :] else len(tokens)
+            uses = self._variables_in_tokens(tokens[in_index + 1 : header_end])
+            return definitions, uses
+
+        if isinstance(statement, (SRIFStatement, SRWhileStatement)):
+            if len(tokens) > 1 and tokens[1] == "(":
+                open_index = tokens.index("(")
+                depth = 0
+                header_end = len(tokens)
+                for index in range(open_index, len(tokens)):
+                    if tokens[index] == "(":
+                        depth += 1
+                    elif tokens[index] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            header_end = index
+                            break
+            elif ":" in tokens:
+                header_end = tokens.index(":")
+            else:
+                header_end = len(tokens)
+            condition_start = 1 if tokens[0] in {"if", "while"} else 0
+            return set(), self._variables_in_tokens(
+                tokens[condition_start:header_end]
+            )
+
+        assignment_operators = {
+            "=", "+=", "-=", "*=", "/=", "%=", "//=", "**=",
+            "&=", "|=", "^=", "<<=", ">>=",
+        }
+        assignment_index = next(
+            (index for index, token in enumerate(tokens) if token in assignment_operators),
+            None,
+        )
+        if assignment_index is None:
+            return set(), self._variables_in_tokens(tokens)
+
+        left = tokens[:assignment_index]
+        right = tokens[assignment_index + 1 :]
+        left_variables = self._variables_in_tokens(left)
+        definitions = set()
+        uses = self._variables_in_tokens(right)
+
+        if "[" in left:
+            # map[index] = value mutates an element. At this PDG granularity
+            # it neither redefines nor reads the container variable `map`;
+            # only index expressions and the RHS are variable uses.
+            bracket_start = left.index("[")
+            uses.update(self._variables_in_tokens(left[bracket_start + 1 :]))
+        elif "." in left:
+            # A field write does not redefine the receiver variable.
+            dot_index = left.index(".")
+            uses.update(self._variables_in_tokens(left[dot_index + 1 :]))
+        else:
+            for token in reversed(left):
+                if token in left_variables:
+                    definitions.add(token)
+                    break
+
+        if tokens[assignment_index] != "=":
+            uses.update(definitions)
+        return definitions, uses
 
     def _create_control_dependency(self, cfg_gen: CFGGenerator):
-        reverse_graph = self._reverse_cfg(cfg_gen)
-        start = None
-        graph = nx.DiGraph()
+        statement_to_node = {
+            node.sr_statement.id: node.id
+            for node in self.node_list
+            if getattr(node.sr_statement, "type", None) != "Fake"
+        }
+        dependencies = set()
 
-        for node in reverse_graph.node_list:
-            graph.add_node(node.id)
-            if node.category == cfg_gen.END_ST_C:
-                start = node.id
+        def child_blocks(statement):
+            if isinstance(statement, SRIFStatement):
+                return [
+                    statement.pos_statement_list,
+                    statement.neg_statement_list,
+                ]
+            if isinstance(statement, (SRFORStatement, SRWhileStatement)):
+                return [statement.child_statement_list]
 
-        for edge in reverse_graph.edge_list:
-            graph.add_edge(edge.source, edge.target)
+            blocks = []
+            for attribute in (
+                "child_statement_list",
+                "statement_list",
+                "try_statement_list",
+                "final_block_statement_list",
+            ):
+                value = getattr(statement, attribute, None)
+                if isinstance(value, tuple):
+                    value = value[0] if value else []
+                if isinstance(value, list) and value:
+                    blocks.append(value)
+            return blocks
 
-        if start is None or start not in graph:
-            return
+        def visit_block(statement_list):
+            for statement in statement_list:
+                controller_id = statement_to_node.get(statement.id)
+                blocks = child_blocks(statement)
+                if controller_id is not None:
+                    for block in blocks:
+                        for child in block:
+                            child_id = statement_to_node.get(child.id)
+                            if child_id is not None and child_id != controller_id:
+                                dependencies.add((controller_id, child_id))
+                for block in blocks:
+                    visit_block(block)
 
-        try:
-            dominators = nx.immediate_dominators(graph, start)
-        except Exception:
-            return
-
-        for node in reverse_graph.node_list:
-            node.i_dominator = dominators.get(node.id)
-
-        dominator_tree = self._compute_dominator_tree(reverse_graph)
-        cfg_graph = GraphLite(self.node_list, self.flow_edge_list)
-        self._compute_control_dependency(cfg_graph, dominator_tree)
+        visit_block(self.sr_method.statement_list)
+        self.cd_edge_list = [
+            PDGEdge(source, target, "control_dependence")
+            for source, target in sorted(
+                dependencies,
+                key=lambda edge: (
+                    self._node_index(edge[0]),
+                    self._node_index(edge[1]),
+                ),
+            )
+        ]
 
     def _reverse_cfg(self, cfg_gen: CFGGenerator):
         node_list = []
