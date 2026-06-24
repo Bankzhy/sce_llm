@@ -17,3 +17,12 @@ train/phi-4/
 train/qwen3-4b/
 
 lora_model_*/
+
+# Large generated datasets and evaluation outputs
+dataset/*.csv
+dataset/*.json
+dataset/*.jsonl
+dataset/spoon.jar
+dataset/graph_test_images_test10/
+eval/predict*.csv
+eval/lora_model_*.csv
