@@ -1,5 +1,6 @@
 import argparse
-import json
+import csv
+import random
 import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -27,12 +28,177 @@ CFG_NODE_TYPES = {
     "loop_statement",
     "return_statement",
 }
+CSV_FIELDNAMES = ["id", "code", "AST", "CFG", "PDG", "is_error", "language"]
+DEFAULT_LANGUAGES = ("java", "python", "javascript")
+DEFAULT_CODESEARCHNET_DATASET = "code-search-net/code_search_net"
+JAVA_ERROR_SYMBOLS = [
+    ">>>=",
+    "<<=",
+    ">>=",
+    "...",
+    "++",
+    "--",
+    "+=",
+    "-=",
+    "*=",
+    "/=",
+    "&=",
+    "|=",
+    "^=",
+    "%=",
+    "==",
+    "!=",
+    ">=",
+    "<=",
+    "&&",
+    "||",
+    "::",
+    ">>>",
+    "<<",
+    ">>",
+    "->",
+    "(",
+    ")",
+    "{",
+    "}",
+    "[",
+    "]",
+    ";",
+    ",",
+    ".",
+    "@",
+    "=",
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    ">",
+    "<",
+    "!",
+    "&",
+    "|",
+    "^",
+    "~",
+    "?",
+    ":",
+]
+PYTHON_ERROR_SYMBOLS = [
+    "**=",
+    "//=",
+    "+=",
+    "-=",
+    "*=",
+    "/=",
+    "%=",
+    "&=",
+    "|=",
+    "^=",
+    ">>=",
+    "<<=",
+    "==",
+    "!=",
+    ">=",
+    "<=",
+    "**",
+    "//",
+    "<<",
+    ">>",
+    "->",
+    "(",
+    ")",
+    "{",
+    "}",
+    "[",
+    "]",
+    ":",
+    ",",
+    ".",
+    ";",
+    "=",
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    ">",
+    "<",
+    "&",
+    "|",
+    "^",
+    "~",
+]
+
+
+def error_symbols_for_lang(lang: str) -> List[str]:
+    if lang == "python":
+        return PYTHON_ERROR_SYMBOLS
+    if lang in {"java", "javascript"}:
+        return JAVA_ERROR_SYMBOLS
+    raise ValueError(f"Unsupported language: {lang}")
+
+
+def generate_error_code(code: str, lang: str) -> str:
+    symbols = sorted(error_symbols_for_lang(lang), key=len, reverse=True)
+    occurrences = []
+
+    for symbol in symbols:
+        start = 0
+        while True:
+            index = code.find(symbol, start)
+            if index == -1:
+                break
+            occurrences.append((index, index + len(symbol)))
+            start = index + 1
+
+    if not occurrences:
+        return code
+
+    start, end = random.choice(occurrences)
+    return code[:start] + code[end:]
+
+
+def generate_error_code_list(code: str, lang: str, num: int) -> List[str]:
+    variants = set()
+    max_attempts = max(1, num * 20)
+    attempts = 0
+
+    while len(variants) < num and attempts < max_attempts:
+        attempts += 1
+        mutated = generate_error_code(code, lang)
+        if mutated != code:
+            variants.add(mutated)
+
+    return list(variants)
 
 
 def extract_code(text: str) -> str:
     pattern = r"```(?:\w+)?\s*\n(.*?)```"
     match = re.search(pattern, text or "", re.DOTALL)
     return (match.group(1) if match else text or "").strip()
+
+
+def row_to_code(row) -> Optional[str]:
+    for field in ("func_code_string", "whole_func_string", "code"):
+        value = row.get(field) if hasattr(row, "get") else None
+        if value:
+            return extract_code(value)
+    return None
+
+
+def make_csv_row(row: Dict[str, object]) -> Dict[str, object]:
+    return {
+        key: (
+            value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+            if isinstance(value, str)
+            else value
+        )
+        for key, value in row.items()
+    }
+
+
+def load_language_dataset(load_dataset, dataset_name: str, lang: str, split: str):
+    return load_dataset(dataset_name, lang, split=split)
 
 
 def indent_code(code: str, spaces: int = 4) -> str:
@@ -227,9 +393,7 @@ def offset_from_lines(
 ) -> str:
     start_line = max(1, min(start_line, len(byte_ranges)))
     end_line = max(start_line, min(end_line, len(byte_ranges)))
-    start_byte = byte_ranges[start_line - 1][0]
-    end_byte = byte_ranges[end_line - 1][1]
-    return f"lines:{start_line}-{end_line};bytes:{start_byte}-{end_byte}"
+    return f"lines:{start_line}-{end_line}"
 
 
 def escape_dot_value(value: str) -> str:
@@ -288,10 +452,7 @@ def ast_to_dot(method_node, method_name: str, test_mode: bool = False) -> str:
                 current_id = str(next_id)
                 next_id += 1
                 node_by_key[node_key] = current_id
-                offset = (
-                    f"lines:{start_line}-{end_line};"
-                    f"bytes:{start_byte}-{end_byte}"
-                )
+                offset = f"lines:{start_line}-{end_line}"
                 label = escape_dot_value(
                     node.text.decode("utf-8", errors="replace")
                 )
@@ -915,52 +1076,132 @@ def gen_code_graph(
 
 def gen(
     output_path: str,
-    limit: Optional[int] = None,
+    max_success_per_lang: int = 10000,
     render_ast_dir: Optional[str] = None,
     test_mode: bool = False,
+    error_samples_per_code: int = 4,
+    dataset_name: str = DEFAULT_CODESEARCHNET_DATASET,
+    split: str = "train",
+    languages: Tuple[str, ...] = DEFAULT_LANGUAGES,
+    max_source_samples: Optional[int] = None,
 ) -> None:
     from datasets import load_dataset
 
-    dataset = load_dataset("greengerong/leetcode", split="train")
-    total = len(dataset) if limit is None else min(limit, len(dataset))
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
     if test_mode and render_ast_dir is None:
         render_ast_dir = str(output_file.parent / "graph_test_images")
 
-    with output_file.open("w", encoding="utf-8") as writer:
-        for index in range(total):
-            row = {"index": index, "graphs": {}}
-            for field, lang in (
-                ("java", "java"),
-                ("python", "python"),
-                ("javascript", "javascript"),
-            ):
-                code = extract_code(dataset[index][field])
+    with output_file.open("w", newline="", encoding="utf-8") as output_handle:
+        writer = csv.DictWriter(output_handle, fieldnames=CSV_FIELDNAMES)
+        writer.writeheader()
+
+        for lang in languages:
+            try:
+                dataset = load_language_dataset(load_dataset, dataset_name, lang, split)
+            except Exception as exc:
+                print(f"[load-failed] lang={lang}: {exc}")
+                continue
+
+            success_count = 0
+            skipped_count = 0
+            scanned_count = 0
+            total = len(dataset)
+            if max_source_samples is not None:
+                total = min(total, max_source_samples)
+
+            for source_index in range(total):
+                if success_count >= max_success_per_lang:
+                    break
+
+                scanned_count += 1
+                code = row_to_code(dataset[source_index])
+                if not code:
+                    skipped_count += 1
+                    continue
+
                 try:
                     graphs = gen_code_graph(code, lang, test_mode=test_mode)
                 except Exception as exc:
-                    row["graphs"][lang] = {"error": str(exc)}
+                    skipped_count += 1
+                    print(f"[skip] lang={lang} index={source_index}: {exc}")
                     continue
 
                 if graphs is None:
-                    row["graphs"][lang] = None
+                    skipped_count += 1
                     continue
+
                 ast, cfg, pdg = graphs
-                row["graphs"][lang] = {"ast": ast, "cfg": cfg, "pdg": pdg}
+                sample_id = f"{split}_{lang}_{success_count}"
+                writer.writerow(
+                    make_csv_row(
+                        {
+                            "id": sample_id,
+                            "code": code,
+                            "AST": ast,
+                            "CFG": cfg,
+                            "PDG": pdg,
+                            "is_error": False,
+                            "language": lang,
+                        }
+                    )
+                )
+
+                for error_index, error_code in enumerate(
+                    generate_error_code_list(code, lang, error_samples_per_code)
+                ):
+                    writer.writerow(
+                        make_csv_row(
+                            {
+                                "id": f"{sample_id}_error_{error_index}",
+                                "code": error_code,
+                                "AST": ast,
+                                "CFG": cfg,
+                                "PDG": pdg,
+                                "is_error": True,
+                                "language": lang,
+                            }
+                        )
+                    )
+
                 if render_ast_dir:
                     image_dir = Path(render_ast_dir)
-                    render_ast_tree(ast, str(image_dir / f"{index}_{lang}_ast.png"))
-                    render_directed_graph(cfg, str(image_dir / f"{index}_{lang}_cfg.png"))
-                    render_directed_graph(pdg, str(image_dir / f"{index}_{lang}_pdg.png"))
+                    image_prefix = f"{lang}_{success_count}"
+                    render_ast_tree(ast, str(image_dir / f"{image_prefix}_ast.png"))
+                    render_directed_graph(cfg, str(image_dir / f"{image_prefix}_cfg.png"))
+                    render_directed_graph(pdg, str(image_dir / f"{image_prefix}_pdg.png"))
 
-            writer.write(json.dumps(row, ensure_ascii=False) + "\n")
+                success_count += 1
+
+            print(
+                f"[done] lang={lang} success={success_count} "
+                f"skipped={skipped_count} scanned={scanned_count}"
+            )
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="dataset/all_graphs.jsonl")
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--output", default="dataset/all_train.csv")
+    parser.add_argument("--dataset", default=DEFAULT_CODESEARCHNET_DATASET)
+    parser.add_argument("--split", default="train")
+    parser.add_argument(
+        "--lang",
+        nargs="+",
+        default=list(DEFAULT_LANGUAGES),
+        choices=list(DEFAULT_LANGUAGES),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10000,
+        help="Maximum successful original code samples to keep per language.",
+    )
+    parser.add_argument(
+        "--max-source-samples",
+        type=int,
+        default=None,
+        help="Optional maximum source rows to scan per language.",
+    )
     parser.add_argument(
         "--render-graph-dir",
         "--render-ast-dir",
@@ -973,9 +1214,25 @@ def parse_args():
         action="store_true",
         help="Include source labels and render AST, CFG, and PDG PNG images.",
     )
+    parser.add_argument(
+        "--error-samples",
+        type=int,
+        default=4,
+        help="Number of random syntax-error code variants to attach per valid code sample.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    gen(args.output, args.limit, args.render_ast_dir, args.test)
+    gen(
+        args.output,
+        args.limit,
+        args.render_ast_dir,
+        args.test,
+        args.error_samples,
+        args.dataset,
+        args.split,
+        tuple(args.lang),
+        args.max_source_samples,
+    )
