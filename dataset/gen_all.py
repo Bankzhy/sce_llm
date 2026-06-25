@@ -31,6 +31,8 @@ CFG_NODE_TYPES = {
 CSV_FIELDNAMES = ["id", "code", "AST", "CFG", "PDG", "is_error", "language"]
 DEFAULT_LANGUAGES = ("java", "python", "javascript")
 DEFAULT_CODESEARCHNET_DATASET = "code-search-net/code_search_net"
+LEETCODE_DATASET = "greengerong/leetcode"
+DEFAULT_LEETCODE_TRAIN_ROWS = 2000
 DEFAULT_MIN_CODE_LINES = 5
 DEFAULT_MAX_CODE_LINES = 30
 JAVA_ERROR_SYMBOLS = [
@@ -189,7 +191,9 @@ def extract_code(text: str) -> str:
     return (match.group(1) if match else text or "").strip()
 
 
-def row_to_code(row) -> Optional[str]:
+def row_to_code(row, lang: Optional[str] = None) -> Optional[str]:
+    if lang and hasattr(row, "get") and row.get(lang):
+        return extract_code(row.get(lang))
     for field in ("func_code_string", "whole_func_string", "code"):
         value = row.get(field) if hasattr(row, "get") else None
         if value:
@@ -218,7 +222,35 @@ def make_csv_row(row: Dict[str, object]) -> Dict[str, object]:
 
 
 def load_language_dataset(load_dataset, dataset_name: str, lang: str, split: str):
+    if dataset_name == LEETCODE_DATASET:
+        return load_dataset(dataset_name, split="train")
     return load_dataset(dataset_name, lang, split=split)
+
+
+def source_index_bounds(
+    dataset_len: int,
+    dataset_name: str,
+    split: str,
+    leetcode_train_rows: int,
+    max_source_samples: Optional[int],
+) -> Tuple[int, int]:
+    if dataset_name == LEETCODE_DATASET:
+        split_name = split.lower()
+        train_end = min(leetcode_train_rows, dataset_len)
+        if split_name == "train":
+            start, end = 0, train_end
+        elif split_name in {"test", "validation", "valid", "eval"}:
+            start, end = train_end, dataset_len
+        else:
+            raise ValueError(
+                f"Unsupported split for {LEETCODE_DATASET}: {split}. Use train or test."
+            )
+    else:
+        start, end = 0, dataset_len
+
+    if max_source_samples is not None:
+        end = min(end, start + max_source_samples)
+    return start, end
 
 
 def indent_code(code: str, spaces: int = 4) -> str:
@@ -1121,6 +1153,7 @@ def gen(
     max_source_samples: Optional[int] = None,
     min_code_lines: int = DEFAULT_MIN_CODE_LINES,
     max_code_lines: int = DEFAULT_MAX_CODE_LINES,
+    leetcode_train_rows: int = DEFAULT_LEETCODE_TRAIN_ROWS,
 ) -> None:
     from datasets import load_dataset
 
@@ -1144,16 +1177,20 @@ def gen(
             skipped_count = 0
             skipped_line_count = 0
             scanned_count = 0
-            total = len(dataset)
-            if max_source_samples is not None:
-                total = min(total, max_source_samples)
+            start_index, end_index = source_index_bounds(
+                len(dataset),
+                dataset_name,
+                split,
+                leetcode_train_rows,
+                max_source_samples,
+            )
 
-            for source_index in range(total):
+            for source_index in range(start_index, end_index):
                 if success_count >= max_success_per_lang:
                     break
 
                 scanned_count += 1
-                code = row_to_code(dataset[source_index])
+                code = row_to_code(dataset[source_index], lang)
                 if not code:
                     skipped_count += 1
                     continue
@@ -1286,6 +1323,12 @@ def parse_args():
         default=DEFAULT_MAX_CODE_LINES,
         help="Maximum method/function line count to keep.",
     )
+    parser.add_argument(
+        "--leetcode-train-rows",
+        type=int,
+        default=DEFAULT_LEETCODE_TRAIN_ROWS,
+        help="Number of greengerong/leetcode source rows reserved for train; remaining rows are used for test.",
+    )
     return parser.parse_args()
 
 
@@ -1303,4 +1346,5 @@ if __name__ == "__main__":
         args.max_source_samples,
         args.min_code_lines,
         args.max_code_lines,
+        args.leetcode_train_rows,
     )
