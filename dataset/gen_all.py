@@ -1104,6 +1104,13 @@ def graph_has_nodes(graph_dot: str) -> bool:
     return any(re.match(r"^\s*\d+\s+\[", line) for line in graph_dot.splitlines())
 
 
+def graph_has_branch_or_loop(graph_dot: str) -> bool:
+    return (
+        'type="conditional_statement"' in graph_dot
+        or 'type="loop_statement"' in graph_dot
+    )
+
+
 def gen_code_graph(
     code: str,
     lang: str,
@@ -1154,6 +1161,7 @@ def gen(
     min_code_lines: int = DEFAULT_MIN_CODE_LINES,
     max_code_lines: int = DEFAULT_MAX_CODE_LINES,
     leetcode_train_rows: int = DEFAULT_LEETCODE_TRAIN_ROWS,
+    require_branch_or_loop: bool = False,
 ) -> None:
     from datasets import load_dataset
 
@@ -1211,6 +1219,11 @@ def gen(
                     skipped_count += 1
                     continue
 
+                ast, cfg, pdg = graphs
+                if require_branch_or_loop and not graph_has_branch_or_loop(cfg):
+                    skipped_count += 1
+                    continue
+
                 error_codes = generate_error_code_list(
                     code,
                     lang,
@@ -1223,7 +1236,6 @@ def gen(
                     skipped_line_count += 1
                     continue
 
-                ast, cfg, pdg = graphs
                 sample_id = f"{split}_{lang}_{success_count}"
                 writer.writerow(
                     make_csv_row(
@@ -1329,6 +1341,11 @@ def parse_args():
         default=DEFAULT_LEETCODE_TRAIN_ROWS,
         help="Number of greengerong/leetcode source rows reserved for train; remaining rows are used for test.",
     )
+    parser.add_argument(
+        "--require-branch-or-loop",
+        action="store_true",
+        help="Keep only samples whose CFG contains a conditional_statement or loop_statement.",
+    )
     return parser.parse_args()
 
 
@@ -1347,4 +1364,5 @@ if __name__ == "__main__":
         args.min_code_lines,
         args.max_code_lines,
         args.leetcode_train_rows,
+        args.require_branch_or_loop,
     )

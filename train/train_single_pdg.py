@@ -10,7 +10,7 @@ from datasets import Dataset
 csv.field_size_limit(200_000_000)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "all_train_60k.csv"
+DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "codesearchnet_filtered_train.csv"
 
 PDG_INSTRUCTION = """You are a program dependence graph generator.
 
