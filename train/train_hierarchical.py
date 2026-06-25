@@ -1,6 +1,7 @@
 import argparse
 import csv
 import inspect
+import re
 from pathlib import Path
 
 from datasets import Dataset
@@ -115,14 +116,18 @@ ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an
 {}"""
 
 
+def model_suffix_from_name(model_name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]+", "_", model_name).strip("_").lower()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Fine-tune a lightweight LLM with hierarchical AST -> CFG -> PDG graph generation."
     )
     parser.add_argument("--train-file", default=str(DEFAULT_TRAIN_FILE))
     parser.add_argument("--model-name", default="unsloth/codellama-7b-bnb-4bit")
-    parser.add_argument("--output-dir", default=str(ROOT_DIR / "outputs" / "hierarchical"))
-    parser.add_argument("--save-dir", default=str(ROOT_DIR / "lora_model_hierarchical"))
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--save-dir", default=None)
     parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--per-device-train-batch-size", type=int, default=2)
@@ -149,7 +154,11 @@ def parse_args() -> argparse.Namespace:
         help="Only load and format hierarchical samples; do not load a model or start training.",
     )
     parser.add_argument("--preview-samples", type=int, default=2)
-    return parser.parse_args()
+    args = parser.parse_args()
+    model_suffix = model_suffix_from_name(args.model_name)
+    args.output_dir = args.output_dir or str(ROOT_DIR / "outputs" / f"hierarchical_{model_suffix}")
+    args.save_dir = args.save_dir or str(ROOT_DIR / f"lora_model_hierarchical_{model_suffix}")
+    return args
 
 
 def find_column(fieldnames: list[str] | None, column: str) -> str:
@@ -268,6 +277,9 @@ def preview_dataset(args: argparse.Namespace) -> None:
     )
 
     print(f"train_file: {args.train_file}")
+    print(f"model_name: {args.model_name}")
+    print(f"output_dir: {args.output_dir}")
+    print(f"save_dir: {args.save_dir}")
     print(f"num_examples: {len(examples)}")
     print(f"dataset_columns: {formatted_dataset.column_names}")
     print()
