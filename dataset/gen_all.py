@@ -31,6 +31,8 @@ CFG_NODE_TYPES = {
 CSV_FIELDNAMES = ["id", "code", "AST", "CFG", "PDG", "is_error", "language"]
 DEFAULT_LANGUAGES = ("java", "python", "javascript")
 DEFAULT_CODESEARCHNET_DATASET = "code-search-net/code_search_net"
+DEFAULT_MIN_CODE_LINES = 5
+DEFAULT_MAX_CODE_LINES = 30
 JAVA_ERROR_SYMBOLS = [
     ">>>=",
     "<<=",
@@ -158,15 +160,24 @@ def generate_error_code(code: str, lang: str) -> str:
     return code[:start] + code[end:]
 
 
-def generate_error_code_list(code: str, lang: str, num: int) -> List[str]:
+def generate_error_code_list(
+    code: str,
+    lang: str,
+    num: int,
+    min_code_lines: int = DEFAULT_MIN_CODE_LINES,
+    max_code_lines: int = DEFAULT_MAX_CODE_LINES,
+) -> List[str]:
     variants = set()
-    max_attempts = max(1, num * 20)
+    max_attempts = max(1, num * 80)
     attempts = 0
 
     while len(variants) < num and attempts < max_attempts:
         attempts += 1
         mutated = generate_error_code(code, lang)
-        if mutated != code:
+        if (
+            mutated != code
+            and code_line_count_in_range(mutated, min_code_lines, max_code_lines)
+        ):
             variants.add(mutated)
 
     return list(variants)
@@ -184,6 +195,15 @@ def row_to_code(row) -> Optional[str]:
         if value:
             return extract_code(value)
     return None
+
+
+def code_line_count(code: str) -> int:
+    return len(code.replace("\\n", "\n").strip().splitlines())
+
+
+def code_line_count_in_range(code: str, min_lines: int, max_lines: int) -> bool:
+    line_count = code_line_count(code)
+    return min_lines <= line_count <= max_lines
 
 
 def make_csv_row(row: Dict[str, object]) -> Dict[str, object]:
@@ -1099,6 +1119,8 @@ def gen(
     split: str = "train",
     languages: Tuple[str, ...] = DEFAULT_LANGUAGES,
     max_source_samples: Optional[int] = None,
+    min_code_lines: int = DEFAULT_MIN_CODE_LINES,
+    max_code_lines: int = DEFAULT_MAX_CODE_LINES,
 ) -> None:
     from datasets import load_dataset
 
@@ -1120,6 +1142,7 @@ def gen(
 
             success_count = 0
             skipped_count = 0
+            skipped_line_count = 0
             scanned_count = 0
             total = len(dataset)
             if max_source_samples is not None:
@@ -1135,6 +1158,11 @@ def gen(
                     skipped_count += 1
                     continue
 
+                if not code_line_count_in_range(code, min_code_lines, max_code_lines):
+                    skipped_count += 1
+                    skipped_line_count += 1
+                    continue
+
                 try:
                     graphs = gen_code_graph(code, lang, test_mode=test_mode)
                 except Exception as exc:
@@ -1144,6 +1172,18 @@ def gen(
 
                 if graphs is None:
                     skipped_count += 1
+                    continue
+
+                error_codes = generate_error_code_list(
+                    code,
+                    lang,
+                    error_samples_per_code,
+                    min_code_lines,
+                    max_code_lines,
+                )
+                if len(error_codes) < error_samples_per_code:
+                    skipped_count += 1
+                    skipped_line_count += 1
                     continue
 
                 ast, cfg, pdg = graphs
@@ -1162,9 +1202,7 @@ def gen(
                     )
                 )
 
-                for error_index, error_code in enumerate(
-                    generate_error_code_list(code, lang, error_samples_per_code)
-                ):
+                for error_index, error_code in enumerate(error_codes):
                     writer.writerow(
                         make_csv_row(
                             {
@@ -1190,7 +1228,8 @@ def gen(
 
             print(
                 f"[done] lang={lang} success={success_count} "
-                f"skipped={skipped_count} scanned={scanned_count}"
+                f"skipped={skipped_count} line_skipped={skipped_line_count} "
+                f"scanned={scanned_count}"
             )
 
 
@@ -1235,6 +1274,18 @@ def parse_args():
         default=4,
         help="Number of random syntax-error code variants to attach per valid code sample.",
     )
+    parser.add_argument(
+        "--min-code-lines",
+        type=int,
+        default=DEFAULT_MIN_CODE_LINES,
+        help="Minimum method/function line count to keep.",
+    )
+    parser.add_argument(
+        "--max-code-lines",
+        type=int,
+        default=DEFAULT_MAX_CODE_LINES,
+        help="Maximum method/function line count to keep.",
+    )
     return parser.parse_args()
 
 
@@ -1250,4 +1301,6 @@ if __name__ == "__main__":
         args.split,
         tuple(args.lang),
         args.max_source_samples,
+        args.min_code_lines,
+        args.max_code_lines,
     )

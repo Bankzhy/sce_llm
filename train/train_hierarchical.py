@@ -12,39 +12,106 @@ csv.field_size_limit(200_000_000)
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "all_train_30k.csv"
 
-HIERARCHICAL_INSTRUCTION = """Generate program graphs for the input code.
+HIERARCHICAL_INSTRUCTION = """You are a program analysis expert.
 
-Output ONLY three DOT graphs in this exact order: AST, CFG, PDG. Do not add explanations or markdown.
+Perform hierarchical reasoning to generate program graphs.
 
-AST:
+Step 1:
+Identify syntactic structures.
+
+Step 2:
+Construct AST.
+AST Rules:
+1. Node ids are plain integers starting from 1.
+2. Use AST node types as node type values.
+3. Use parent-child AST relations as edges.
+4. Edges do not have attributes.
+5. Treat the first line of the given method/function as line 1 in offset values.
+6. AST node offsets must include both line offsets and byte offsets.
+7. The graph name must use the form AST_<MethodName>.
+
 digraph AST_<MethodName> {
     <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>;bytes:<StartByte>-<EndByte>"];
     <SourceNodeID> -> <TargetNodeID>;
 }
-Use parent-child edges. Node ids are plain integers. Offsets include lines and bytes.
+NodeType=[process_statement, conditional_statement, loop_statement, return_statement, type_identifier, var_identifier, method_identifier]
 
-CFG:
+Step 3:
+Infer control flow from AST.
+
+Step 4:
+Construct CFG.
+CFG Rules:
+1. Each executable statement is one node.
+2. Node ids are plain integers.
+3. Node type is the statement type, such as process_statement, conditional_statement, loop_statement, or return_statement.
+4. Ignore comments, block-only nodes, punctuation, labels, and shape attributes.
+5. Edges represent executable control flow and do not have attributes.
+6. CFG node offsets must include line offsets only; do not include byte offsets.
+7. The graph name must use the form CFG_<MethodName>.
+
 digraph CFG_<MethodName> {
     <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
     <SourceNodeID> -> <TargetNodeID>;
 }
-Use executable control-flow edges only. CFG offsets include lines only.
+NodeType=[process_statement, conditional_statement, loop_statement, return_statement]
 
-PDG:
+Step 5:
+Infer data/control dependencies from AST and CFG.
+
+Step 6:
+Construct PDG.
+PDG Rules:
+1. Each executable statement is one node.
+2. Node ids are plain integers.
+3. Node type is the statement type, such as process_statement, conditional_statement, loop_statement, or return_statement.
+4. Ignore comments, block-only nodes, punctuation, labels, and shape attributes.
+5. Edges must use only data_dependency or control_dependency.
+6. Do not generate control_flow edges.
+7. PDG node offsets must include line offsets only; do not include byte offsets.
+8. The graph name must use the form PDG_<MethodName>.
+
+PDG Format:
 digraph PDG_<MethodName> {
     <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
     <SourceNodeID> -> <TargetNodeID> [type="<EdgeType>"];
 }
-Use only data_dependency and control_dependency edges. Do not output control_flow edges.
+NodeType=[process_statement, conditional_statement, loop_statement, return_statement]
+EdgeType=[control_dependency, data_dependency]
 
-Statement node types: process_statement, conditional_statement, loop_statement, return_statement.
-Ignore comments, block-only nodes, punctuation, labels, and shape attributes. Treat the first input line as line 1.
+Output Requirements:
+1. Output ONLY the graphs.
+2. Do NOT output explanations.
+3. Do NOT output markdown.
+4. Generate the graphs in this exact order: AST, CFG, PDG.
+5. AST offsets must include lines and bytes.
+6. CFG and PDG offsets must include lines only.
+7. Follow the exact DOT digraph formats below.
+
+digraph AST_<MethodName> {
+    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>;bytes:<StartByte>-<EndByte>"];
+    <SourceNodeID> -> <TargetNodeID>;
+}
+
+digraph CFG_<MethodName> {
+    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
+    <SourceNodeID> -> <TargetNodeID>;
+}
+
+digraph PDG_<MethodName> {
+    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
+    <SourceNodeID> -> <TargetNodeID> [type="<EdgeType>"];
+}
 """
 
-ALPACA_PROMPT = """### Instruction:
+ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+### Instruction:
 {}
+
 ### Input:
 {}
+
 ### Response:
 {}"""
 
