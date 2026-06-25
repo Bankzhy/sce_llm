@@ -266,6 +266,7 @@ def find_target_method(root, lang: str):
         "java": {"method_declaration", "constructor_declaration"},
         "python": {"function_definition"},
         "javascript": {
+            "function",
             "method_definition",
             "function_declaration",
             "function_expression",
@@ -326,6 +327,7 @@ def normalize_ast_node_type(node) -> Optional[str]:
         "method_definition",
         "function_declaration",
         "function_expression",
+        "function",
         "arrow_function",
     }:
         return None
@@ -452,7 +454,10 @@ def ast_to_dot(method_node, method_name: str, test_mode: bool = False) -> str:
                 current_id = str(next_id)
                 next_id += 1
                 node_by_key[node_key] = current_id
-                offset = f"lines:{start_line}-{end_line}"
+                offset = (
+                    f"lines:{start_line}-{end_line};"
+                    f"bytes:{start_byte}-{end_byte}"
+                )
                 label = escape_dot_value(
                     node.text.decode("utf-8", errors="replace")
                 )
@@ -1043,6 +1048,10 @@ def pdg_to_dot(
     return "\n".join(output)
 
 
+def graph_has_nodes(graph_dot: str) -> bool:
+    return any(re.match(r"^\s*\d+\s+\[", line) for line in graph_dot.splitlines())
+
+
 def gen_code_graph(
     code: str,
     lang: str,
@@ -1061,16 +1070,22 @@ def gen_code_graph(
     method_name = get_method_name(method_node, lang)
     method_bytes = method_node.text
     ast_dot = ast_to_dot(method_node, method_name, test_mode=test_mode)
+    if not graph_has_nodes(ast_dot):
+        return None
 
     cfg_gen = CFGGenerator(sr_method=sr_method)
     if not cfg_gen.create_graph():
         return None
     cfg_dot = cfg_to_dot(sr_method, cfg_gen, method_bytes, test_mode=test_mode)
+    if not graph_has_nodes(cfg_dot):
+        return None
 
     pdg_builder = PDGBuilder(sr_method)
     if not pdg_builder.create_graph():
         return None
     pdg_dot = pdg_to_dot(sr_method, pdg_builder, method_bytes, test_mode=test_mode)
+    if not graph_has_nodes(pdg_dot):
+        return None
     return ast_dot, cfg_dot, pdg_dot
 
 
