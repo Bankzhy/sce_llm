@@ -1,5 +1,6 @@
 import argparse
 import csv
+import inspect
 from pathlib import Path
 
 from datasets import Dataset
@@ -208,9 +209,14 @@ def main() -> None:
         return
 
     import torch
+    from unsloth import FastLanguageModel
     from transformers import TrainingArguments
     from trl import SFTTrainer
-    from unsloth import FastLanguageModel
+
+    try:
+        from trl import SFTConfig
+    except ImportError:
+        SFTConfig = None
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_name,
@@ -246,31 +252,61 @@ def main() -> None:
         random_state=args.seed,
     )
 
-    trainer = SFTTrainer(
-        model=model,
-        train_dataset=dataset,
-        dataset_text_field="text",
-        max_seq_length=args.max_seq_length,
-        tokenizer=tokenizer,
-        packing=args.packing,
-        args=TrainingArguments(
-            per_device_train_batch_size=args.per_device_train_batch_size,
-            gradient_accumulation_steps=args.gradient_accumulation_steps,
-            num_train_epochs=args.num_train_epochs,
-            warmup_ratio=args.warmup_ratio,
-            learning_rate=args.learning_rate,
-            fp16=not torch.cuda.is_bf16_supported(),
-            bf16=torch.cuda.is_bf16_supported(),
-            logging_steps=args.logging_steps,
-            save_steps=args.save_steps,
-            optim="adamw_8bit",
-            weight_decay=0.01,
-            lr_scheduler_type="cosine",
-            output_dir=args.output_dir,
-            seed=args.seed,
-            report_to="none",
-        ),
-    )
+    training_kwargs = {
+        "per_device_train_batch_size": args.per_device_train_batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "num_train_epochs": args.num_train_epochs,
+        "warmup_ratio": args.warmup_ratio,
+        "learning_rate": args.learning_rate,
+        "fp16": not torch.cuda.is_bf16_supported(),
+        "bf16": torch.cuda.is_bf16_supported(),
+        "logging_steps": args.logging_steps,
+        "save_steps": args.save_steps,
+        "optim": "adamw_8bit",
+        "weight_decay": 0.01,
+        "lr_scheduler_type": "cosine",
+        "output_dir": args.output_dir,
+        "seed": args.seed,
+        "report_to": "none",
+    }
+
+    if SFTConfig is None:
+        trainer_args = TrainingArguments(**training_kwargs)
+    else:
+        sft_config_params = inspect.signature(SFTConfig.__init__).parameters
+        sft_kwargs = {
+            key: value
+            for key, value in training_kwargs.items()
+            if key in sft_config_params
+        }
+        if "dataset_text_field" in sft_config_params:
+            sft_kwargs["dataset_text_field"] = "text"
+        if "max_length" in sft_config_params:
+            sft_kwargs["max_length"] = args.max_seq_length
+        elif "max_seq_length" in sft_config_params:
+            sft_kwargs["max_seq_length"] = args.max_seq_length
+        if "packing" in sft_config_params:
+            sft_kwargs["packing"] = args.packing
+        trainer_args = SFTConfig(**sft_kwargs)
+
+    trainer_kwargs = {
+        "model": model,
+        "train_dataset": dataset,
+        "args": trainer_args,
+    }
+    trainer_params = inspect.signature(SFTTrainer.__init__).parameters
+    if "processing_class" in trainer_params:
+        trainer_kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in trainer_params:
+        trainer_kwargs["tokenizer"] = tokenizer
+    if "dataset_text_field" in trainer_params:
+        trainer_kwargs["dataset_text_field"] = "text"
+    if "max_seq_length" in trainer_params:
+        trainer_kwargs["max_seq_length"] = args.max_seq_length
+    if "packing" in trainer_params:
+        trainer_kwargs["packing"] = args.packing
+
+    trainer = SFTTrainer(**trainer_kwargs)
 
     trainer.train()
     model.save_pretrained(args.save_dir)
