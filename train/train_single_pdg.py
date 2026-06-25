@@ -15,7 +15,7 @@ DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "all_train_60k.csv"
 PDG_INSTRUCTION = """You are a program dependence graph generator.
 
 Task:
-Generate the Program Dependence Graph (PDG) for the given Java, Python, or JavaScript method/function.
+Generate the Program Dependence Graph (PDG) for the given code.
 
 Output Requirements:
 1. Output ONLY the PDG graph.

@@ -15,7 +15,7 @@ DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "all_train_30k.csv"
 CFG_INSTRUCTION = """You are a control flow graph generator.
 
 Task:
-Generate the Control Flow Graph (CFG) for the given Java, Python, or JavaScript method/function.
+Generate the Control Flow Graph (CFG) for the given code.
 
 Output Requirements:
 1. Output ONLY the CFG graph.
