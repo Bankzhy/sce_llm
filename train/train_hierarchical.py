@@ -10,7 +10,7 @@ from datasets import Dataset
 csv.field_size_limit(200_000_000)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "all_train_60k.csv"
+DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "all_train_30k.csv"
 
 HIERARCHICAL_INSTRUCTION = """You are a program analysis expert.
 
@@ -130,8 +130,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-dir", default=None)
     parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--per-device-train-batch-size", type=int, default=2)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    parser.add_argument("--per-device-train-batch-size", type=int, default=4)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--num-train-epochs", type=float, default=3.0)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
