@@ -35,6 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument(
+        "--small-test",
+        action="store_true",
+        help="Quick smoke test: evaluate only the first 10 samples after language filtering.",
+    )
     parser.add_argument("--preview-samples", type=int, default=3)
     parser.add_argument(
         "--language-group",
@@ -358,6 +363,9 @@ def generate_graphs(model, tokenizer, code: str, max_new_tokens: int) -> str:
 
 def evaluate() -> None:
     args = parse_args()
+    if args.small_test and args.max_samples is None:
+        args.max_samples = 10
+
     languages = language_filter_from_args(args)
     output_file = args.output_file or default_output_file(args.model_dir, languages)
 
