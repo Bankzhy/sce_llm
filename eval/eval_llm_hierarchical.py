@@ -105,6 +105,16 @@ def restore_graph_newlines(text: str) -> str:
     return str(text).replace("\\n", "\n").strip()
 
 
+def strip_byte_offsets(graph_text: str) -> str:
+    return re.sub(r";bytes:\d+-\d+", "", restore_graph_newlines(graph_text))
+
+
+def normalize_graph_for_metrics(graph_text: str, graph_type: str) -> str:
+    if graph_type == "AST":
+        return strip_byte_offsets(graph_text)
+    return restore_graph_newlines(graph_text)
+
+
 def extract_graph(text: str, graph_type: str) -> str:
     if not isinstance(text, str):
         return ""
@@ -156,14 +166,6 @@ def node_match_score(pred_node: dict[str, str], gt_node: dict[str, str], graph_t
     pred_offset = parse_offset(pred_node["offset"])
     gt_offset = parse_offset(gt_node["offset"])
     line_score = range_iou(pred_offset["lines"], gt_offset["lines"])
-
-    if graph_type == "AST":
-        pred_bytes = pred_offset["bytes"]
-        gt_bytes = gt_offset["bytes"]
-        if pred_bytes is not None and gt_bytes is not None:
-            byte_score = range_iou(pred_bytes, gt_bytes)
-            return 0.6 * line_score + 0.4 * byte_score
-        return line_score
 
     return line_score
 
@@ -509,12 +511,12 @@ def evaluate() -> None:
         )
         prediction = generate_graphs(model, tokenizer, example["code"], args.max_new_tokens)
         pred_graphs = {
-            "AST": extract_graph(prediction, "AST"),
+            "AST": normalize_graph_for_metrics(extract_graph(prediction, "AST"), "AST"),
             "CFG": extract_graph(prediction, "CFG"),
             "PDG": extract_graph(prediction, "PDG"),
         }
         gt_graphs = {
-            "AST": example["AST"].strip(),
+            "AST": normalize_graph_for_metrics(example["AST"], "AST"),
             "CFG": example["CFG"].strip(),
             "PDG": example["PDG"].strip(),
         }
