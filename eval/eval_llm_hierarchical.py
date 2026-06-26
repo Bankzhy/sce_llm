@@ -2,6 +2,7 @@ import argparse
 import csv
 import re
 import sys
+import time
 from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -31,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-file", default=str(DEFAULT_TEST_FILE))
     parser.add_argument("--model-dir", default=str(DEFAULT_MODEL_DIR))
     parser.add_argument("--output-file", default=None)
+    parser.add_argument("--metrics-file", default=None)
     parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
@@ -79,6 +81,11 @@ def default_output_file(model_dir: str, languages: set[str] | None) -> str:
         / "eval"
         / f"predict_hierarchical_{suffix}_{language_suffix(languages)}.csv"
     )
+
+
+def default_metrics_file(output_file: str) -> str:
+    path = Path(output_file)
+    return str(path.with_name(f"{path.stem}_metrics.csv"))
 
 
 def build_prompt(code: str) -> str:
@@ -309,6 +316,56 @@ def print_summary(title: str, summary: dict) -> None:
         print()
 
 
+def summary_rows(split_name: str, summary: dict) -> list[dict[str, float | int | str]]:
+    rows = []
+    for graph_type in ["AST", "CFG", "PDG"]:
+        bucket = summary[graph_type]
+        count = bucket["count"]
+        rows.append(
+            {
+                "split": split_name,
+                "graph_type": graph_type,
+                "samples": count,
+                "node_precision": mean(bucket["node_precision"]),
+                "node_recall": mean(bucket["node_recall"]),
+                "node_f1": mean(bucket["node_f1"]),
+                "edge_precision": mean(bucket["edge_precision"]),
+                "edge_recall": mean(bucket["edge_recall"]),
+                "edge_f1": mean(bucket["edge_f1"]),
+                "node_exact": bucket["node_exact"] / count if count else 0.0,
+                "edge_exact": bucket["edge_exact"] / count if count else 0.0,
+                "graph_exact": bucket["graph_exact"] / count if count else 0.0,
+            }
+        )
+    return rows
+
+
+def save_metrics_summary(metrics_file: str, summaries: list[tuple[str, dict]]) -> None:
+    rows = []
+    for split_name, summary in summaries:
+        rows.extend(summary_rows(split_name, summary))
+
+    fieldnames = [
+        "split",
+        "graph_type",
+        "samples",
+        "node_precision",
+        "node_recall",
+        "node_f1",
+        "edge_precision",
+        "edge_recall",
+        "edge_f1",
+        "node_exact",
+        "edge_exact",
+        "graph_exact",
+    ]
+    Path(metrics_file).parent.mkdir(parents=True, exist_ok=True)
+    with open(metrics_file, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def new_summary() -> dict:
     return defaultdict(
         lambda: {
@@ -368,6 +425,7 @@ def evaluate() -> None:
 
     languages = language_filter_from_args(args)
     output_file = args.output_file or default_output_file(args.model_dir, languages)
+    metrics_file = args.metrics_file or default_metrics_file(output_file)
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_dir,
@@ -388,14 +446,25 @@ def evaluate() -> None:
     print(f"language_filter: {sorted(languages) if languages else 'all'}")
     print(f"num_examples: {len(examples)}")
     print(f"output_file: {output_file}")
+    print(f"metrics_file: {metrics_file}")
 
     rows = []
     overall_summary = new_summary()
     clean_summary = new_summary()
     error_summary = new_summary()
+    start_time = time.time()
 
     for index, example in enumerate(examples, start=1):
-        print(f"[{index}/{len(examples)}] language={example['language']} is_error={example['is_error']}")
+        elapsed = time.time() - start_time
+        avg_seconds = elapsed / max(index - 1, 1)
+        remaining = avg_seconds * (len(examples) - index + 1)
+        percent = index / len(examples) * 100
+        print(
+            f"[{index}/{len(examples)} | {percent:6.2f}%] "
+            f"language={example['language']} is_error={example['is_error']} "
+            f"elapsed={elapsed / 60:.1f}m eta={remaining / 60:.1f}m",
+            flush=True,
+        )
         prediction = generate_graphs(model, tokenizer, example["code"], args.max_new_tokens)
         pred_graphs = {
             "AST": extract_graph(prediction, "AST"),
@@ -442,6 +511,15 @@ def evaluate() -> None:
         writer.writerows(rows)
 
     print(f"Saved predictions to {output_file}")
+    save_metrics_summary(
+        metrics_file,
+        [
+            ("overall", overall_summary),
+            ("is_error_false", clean_summary),
+            ("is_error_true", error_summary),
+        ],
+    )
+    print(f"Saved metric summary to {metrics_file}")
     print_summary("Overall", overall_summary)
     print_summary("is_error=False", clean_summary)
     print_summary("is_error=True", error_summary)
