@@ -16,28 +16,17 @@ CFG_INSTRUCTION = """You are a control flow graph generator.
 
 Task:
 Generate the Control Flow Graph (CFG) for the given code.
-
+Construct CFG in following format:
+digraph CFG_<MethodName> {
+    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
+    <SourceNodeID> -> <TargetNodeID>;
+}
+NodeType=[process_statement, conditional_statement, loop_statement, return_statement]
 Output Requirements:
 1. Output ONLY the CFG graph.
 2. Do NOT output explanations.
 3. Do NOT output markdown.
 4. Follow the exact DOT digraph format below.
-
-CFG Format:
-digraph CFG_<MethodName> {
-    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
-    <SourceNodeID> -> <TargetNodeID>;
-}
-
-CFG Rules:
-1. Each executable statement is one node.
-2. Node ids are plain integers.
-3. Use only the following CFG node types:
-   process_statement, conditional_statement, loop_statement, return_statement.
-4. Ignore comments, block-only nodes, punctuation, labels, and shape attributes.
-5. Edges represent executable control flow and do not have attributes.
-6. Treat the first line of the given method/function as line 1 in offset values.
-7. The graph name must use the form CFG_<MethodName>.
 """
 
 ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
