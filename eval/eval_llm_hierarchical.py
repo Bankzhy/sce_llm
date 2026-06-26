@@ -135,6 +135,10 @@ def node_signature(node_type: str, offset: str) -> str:
     return normalize_dot_value(f"{node_type} {offset}")
 
 
+def ast_identifier_type(node_type: str) -> bool:
+    return node_type in {"type_identifier", "var_identifier", "method_identifier"}
+
+
 def text_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, normalize_dot_value(a), normalize_dot_value(b)).ratio()
 
@@ -167,6 +171,10 @@ def node_match_score(pred_node: dict[str, str], gt_node: dict[str, str], graph_t
     gt_offset = parse_offset(gt_node["offset"])
     line_score = range_iou(pred_offset["lines"], gt_offset["lines"])
 
+    if graph_type == "AST" and ast_identifier_type(gt_node["type"]):
+        label_score = text_similarity(pred_node.get("label", ""), gt_node.get("label", ""))
+        return 0.5 * line_score + 0.5 * label_score
+
     return line_score
 
 
@@ -175,16 +183,19 @@ def parse_nodes(graph_text: str) -> dict[str, dict[str, str]]:
         return {}
     graph_text = restore_graph_newlines(graph_text)
     pattern = re.compile(
-        r'^\s*(\d+)\s+\[type="([^"]+)",\s*offset="([^"]+)"\];',
+        r'^\s*(\d+)\s+\[type="([^"]+)",\s*offset="([^"]+)"(?:,\s*label="((?:\\.|[^"])*)")?\];',
         re.MULTILINE,
     )
     return {
         node_id: {
             "type": normalize_dot_value(node_type),
             "offset": normalize_dot_value(offset),
-            "signature": node_signature(node_type, offset),
+            "label": normalize_dot_value(label or ""),
+            "signature": normalize_dot_value(
+                f"{node_type} {offset} {label or ''}"
+            ),
         }
-        for node_id, node_type, offset in pattern.findall(graph_text)
+        for node_id, node_type, offset, label in pattern.findall(graph_text)
     }
 
 

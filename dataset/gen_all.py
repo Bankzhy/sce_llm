@@ -506,10 +506,7 @@ def ast_to_dot(method_node, method_name: str, test_mode: bool = False) -> str:
                 current_id = str(next_id)
                 next_id += 1
                 node_by_key[node_key] = current_id
-                offset = (
-                    f"lines:{start_line}-{end_line};"
-                    f"bytes:{start_byte}-{end_byte}"
-                )
+                offset = f"lines:{start_line}-{end_line}"
                 label = escape_dot_value(
                     node.text.decode("utf-8", errors="replace")
                 )
@@ -534,10 +531,14 @@ def ast_to_dot(method_node, method_name: str, test_mode: bool = False) -> str:
             for node_id, node_type, offset, label in nodes
         )
     else:
-        output.extend(
-            f'    {node_id} [type="{node_type}", offset="{offset}"];'
-            for node_id, node_type, offset, _ in nodes
-        )
+        for node_id, node_type, offset, label in nodes:
+            if node_type in {"type_identifier", "var_identifier", "method_identifier"}:
+                output.append(
+                    f'    {node_id} [type="{node_type}", offset="{offset}", '
+                    f'label="{label}"];'
+                )
+            else:
+                output.append(f'    {node_id} [type="{node_type}", offset="{offset}"];')
     output.extend(
         f"    {source} -> {target};"
         for source, target in dict.fromkeys(edges)

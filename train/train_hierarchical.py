@@ -17,10 +17,12 @@ Perform hierarchical reasoning to generate program graphs.
 Step 1:
 Construct AST in following format:
 digraph AST_<MethodName> {
-    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>;bytes:<StartByte>-<EndByte>"];
+    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
+    <IdentifierNodeID> [type="<IdentifierNodeType>", offset="lines:<StartLine>-<EndLine>", label="<IdentifierName>"];
     <SourceNodeID> -> <TargetNodeID>;
 }
 NodeType=[process_statement, conditional_statement, loop_statement, return_statement, type_identifier, var_identifier, method_identifier]
+IdentifierNodeType=[type_identifier, var_identifier, method_identifier]
 Step 2:
 Construct CFG in following format:
 digraph CFG_<MethodName> {
@@ -43,8 +45,8 @@ Output Requirements:
 2. Do NOT output explanations.
 3. Do NOT output markdown.
 4. Generate the graphs in this exact order: AST, CFG, PDG.
-5. AST offsets must include lines and bytes.
-6. CFG and PDG offsets must include lines only.
+5. AST, CFG, and PDG offsets must include lines only.
+6. Only AST identifier nodes with type type_identifier, var_identifier, or method_identifier may include a label attribute.
 7. Follow the exact DOT digraph formats.
 """
 
