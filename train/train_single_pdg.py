@@ -16,31 +16,18 @@ PDG_INSTRUCTION = """You are a program dependence graph generator.
 
 Task:
 Generate the Program Dependence Graph (PDG) for the given code.
-
+Construct PDG in following format:
+digraph PDG_<MethodName> {
+    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
+    <SourceNodeID> -> <TargetNodeID> [type="<EdgeType>"];
+}
+NodeType=[process_statement, conditional_statement, loop_statement, return_statement]
+EdgeType=[control_dependency, data_dependency]
 Output Requirements:
 1. Output ONLY the PDG graph.
 2. Do NOT output explanations.
 3. Do NOT output markdown.
 4. Follow the exact DOT digraph format below.
-
-PDG Format:
-digraph PDG_<MethodName> {
-    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
-    <SourceNodeID> -> <TargetNodeID> [type="<EdgeType>"];
-}
-
-PDG Rules:
-1. Each executable statement is one node.
-2. Node ids are plain integers.
-3. Use only the following PDG node types:
-   process_statement, conditional_statement, loop_statement, return_statement.
-4. Ignore comments, block-only nodes, punctuation, labels, and shape attributes.
-5. Edges represent program dependencies and must have a type attribute.
-6. Use only the following PDG edge types:
-   data_dependency, control_dependency.
-7. Do not generate control_flow edges.
-8. Treat the first line of the given method/function as line 1 in offset values.
-9. The graph name must use the form PDG_<MethodName>.
 """
 
 ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
