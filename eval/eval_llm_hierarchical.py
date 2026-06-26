@@ -23,6 +23,8 @@ from train.train_hierarchical import ALPACA_PROMPT, HIERARCHICAL_INSTRUCTION, mo
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "codesearchnet_filtered_test.csv"
 DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_hierarchical_unsloth_codellama_7b_bnb_4bit"
 NODE_SIM_THRESHOLD = 0.95
+AST_NODE_SIM_THRESHOLD = 0.80
+CFG_PDG_NODE_SIM_THRESHOLD = 0.90
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,6 +129,45 @@ def text_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, normalize_dot_value(a), normalize_dot_value(b)).ratio()
 
 
+def parse_offset(offset: str) -> dict[str, tuple[int, int] | None]:
+    line_match = re.search(r"lines:(\d+)-(\d+)", offset or "")
+    byte_match = re.search(r"bytes:(\d+)-(\d+)", offset or "")
+    return {
+        "lines": tuple(map(int, line_match.groups())) if line_match else None,
+        "bytes": tuple(map(int, byte_match.groups())) if byte_match else None,
+    }
+
+
+def range_iou(left: tuple[int, int] | None, right: tuple[int, int] | None) -> float:
+    if left is None or right is None:
+        return 0.0
+
+    left_start, left_end = left
+    right_start, right_end = right
+    intersection = max(0, min(left_end, right_end) - max(left_start, right_start) + 1)
+    union = max(left_end, right_end) - min(left_start, right_start) + 1
+    return intersection / union if union > 0 else 0.0
+
+
+def node_match_score(pred_node: dict[str, str], gt_node: dict[str, str], graph_type: str) -> float:
+    if pred_node["type"] != gt_node["type"]:
+        return 0.0
+
+    pred_offset = parse_offset(pred_node["offset"])
+    gt_offset = parse_offset(gt_node["offset"])
+    line_score = range_iou(pred_offset["lines"], gt_offset["lines"])
+
+    if graph_type == "AST":
+        pred_bytes = pred_offset["bytes"]
+        gt_bytes = gt_offset["bytes"]
+        if pred_bytes is not None and gt_bytes is not None:
+            byte_score = range_iou(pred_bytes, gt_bytes)
+            return 0.6 * line_score + 0.4 * byte_score
+        return line_score
+
+    return line_score
+
+
 def parse_nodes(graph_text: str) -> dict[str, dict[str, str]]:
     if not isinstance(graph_text, str):
         return {}
@@ -183,6 +224,7 @@ def prf(tp: int, pred_total: int, gt_total: int) -> tuple[float, float, float]:
 def match_nodes(
     pred_nodes: dict[str, dict[str, str]],
     gt_nodes: dict[str, dict[str, str]],
+    graph_type: str,
 ) -> list[tuple[str, str, float]]:
     matched_pairs = []
     used_gt = set()
@@ -195,17 +237,17 @@ def match_nodes(
             if gt_id in used_gt:
                 continue
 
-            # Keep node category semantically aligned, then allow fuzzy matching
-            # on the remaining structural text, following calc_metrics.py's spirit.
-            if pred_node["type"] != gt_node["type"]:
-                continue
-
-            score = text_similarity(pred_node["signature"], gt_node["signature"])
+            score = node_match_score(pred_node, gt_node, graph_type)
             if score > best_score:
                 best_score = score
                 best_gt_id = gt_id
 
-        if best_gt_id is not None and best_score >= NODE_SIM_THRESHOLD:
+        threshold = (
+            AST_NODE_SIM_THRESHOLD
+            if graph_type == "AST"
+            else CFG_PDG_NODE_SIM_THRESHOLD
+        )
+        if best_gt_id is not None and best_score >= threshold:
             matched_pairs.append((pred_id, best_gt_id, best_score))
             used_gt.add(best_gt_id)
 
@@ -224,13 +266,13 @@ def mapped_pred_edges(
     return result
 
 
-def graph_metrics(pred_graph: str, gt_graph: str) -> dict[str, float | int]:
+def graph_metrics(pred_graph: str, gt_graph: str, graph_type: str) -> dict[str, float | int]:
     pred_nodes = parse_nodes(pred_graph)
     gt_nodes = parse_nodes(gt_graph)
     pred_edges = parse_edges(pred_graph)
     gt_edges = parse_edges(gt_graph)
 
-    matched_pairs = match_nodes(pred_nodes, gt_nodes)
+    matched_pairs = match_nodes(pred_nodes, gt_nodes, graph_type)
     node_tp = len(matched_pairs)
     pred_node_total = len(pred_nodes)
     gt_node_total = len(gt_nodes)
@@ -492,7 +534,7 @@ def evaluate() -> None:
 
         target_summary = error_summary if to_bool(example["is_error"]) else clean_summary
         for graph_type in ["AST", "CFG", "PDG"]:
-            metrics = graph_metrics(pred_graphs[graph_type], gt_graphs[graph_type])
+            metrics = graph_metrics(pred_graphs[graph_type], gt_graphs[graph_type], graph_type)
             update_summary(overall_summary, graph_type, metrics)
             update_summary(target_summary, graph_type, metrics)
             for metric_name, metric_value in metrics.items():
