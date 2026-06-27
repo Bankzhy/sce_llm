@@ -293,7 +293,7 @@ def main() -> None:
         lora_alpha=args.lora_alpha,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing=False,
+        use_gradient_checkpointing="unsloth",
         random_state=args.seed,
     )
 
