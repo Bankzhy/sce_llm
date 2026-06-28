@@ -14,48 +14,27 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from eval.graph_eval_common import (
+    clean_prediction,
+    extract_graph,
+    graph_metrics,
+    new_summary,
+    normalize_graph_for_metrics,
+    print_summary,
+    save_metrics_summary,
+    to_bool,
+    update_summary,
+)
+from train.train_single_cfg import ALPACA_PROMPT, CFG_INSTRUCTION, model_suffix_from_name
+
 
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "codesearchnet_filtered_test.csv"
 DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_single_cfg_unsloth_codellama_7b_bnb_4bit"
-CFG_NODE_SIM_THRESHOLD = 0.90
-
-CFG_INSTRUCTION = """You are a control flow graph generator.
-
-Task:
-Generate the Control Flow Graph (CFG) for the given code.
-Construct CFG in following format:
-digraph CFG_<MethodName> {
-    <NodeID> [type="<NodeType>", offset="lines:<StartLine>-<EndLine>"];
-    <SourceNodeID> -> <TargetNodeID>;
-}
-NodeType=[process_statement, conditional_statement, loop_statement, return_statement]
-Output Requirements:
-1. Output ONLY the CFG graph.
-2. Do NOT output explanations.
-3. Do NOT output markdown.
-4. Follow the exact DOT digraph format below.
-"""
-
-ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
-
-### Instruction:
-{}
-
-### Input:
-{}
-
-### Response:
-{}"""
-
-
-def model_suffix_from_name(model_name: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9]+", "_", model_name).strip("_").lower()
+GRAPH_TYPES = ["CFG"]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Evaluate a single-CFG fine-tuned model."
-    )
+    parser = argparse.ArgumentParser(description="Evaluate a single-CFG fine-tuned model.")
     parser.add_argument("--test-file", default=str(DEFAULT_TEST_FILE))
     parser.add_argument("--model-dir", default=str(DEFAULT_MODEL_DIR))
     parser.add_argument("--output-file", default=None)
@@ -113,271 +92,6 @@ def default_metrics_file(output_file: str) -> str:
 
 def build_prompt(code: str) -> str:
     return ALPACA_PROMPT.format(CFG_INSTRUCTION, code, "")
-
-
-def clean_prediction(text: str) -> str:
-    text = str(text).strip()
-    text = text.replace("Ċ", "\n")
-    text = text.replace("Ġ", " ")
-    return text
-
-
-def restore_graph_newlines(text: str) -> str:
-    return str(text).replace("\\n", "\n").strip()
-
-
-def extract_cfg(text: str) -> str:
-    if not isinstance(text, str):
-        return ""
-    text = restore_graph_newlines(text)
-    pattern = re.compile(
-        r"digraph\s+CFG_[A-Za-z0-9_]*\s*\{.*?\n\s*\}",
-        re.DOTALL,
-    )
-    match = pattern.search(text)
-    return match.group(0).strip() if match else ""
-
-
-def normalize_dot_value(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value).strip())
-
-
-def parse_offset(offset: str) -> tuple[int, int] | None:
-    line_match = re.search(r"lines:(\d+)-(\d+)", offset or "")
-    return tuple(map(int, line_match.groups())) if line_match else None
-
-
-def range_iou(left: tuple[int, int] | None, right: tuple[int, int] | None) -> float:
-    if left is None or right is None:
-        return 0.0
-
-    left_start, left_end = left
-    right_start, right_end = right
-    intersection = max(0, min(left_end, right_end) - max(left_start, right_start) + 1)
-    union = max(left_end, right_end) - min(left_start, right_start) + 1
-    return intersection / union if union > 0 else 0.0
-
-
-def parse_nodes(graph_text: str) -> dict[str, dict[str, str]]:
-    if not isinstance(graph_text, str):
-        return {}
-    graph_text = restore_graph_newlines(graph_text)
-    pattern = re.compile(
-        r'^\s*(\d+)\s+\[type="([^"]+)",\s*offset="([^"]+)"\];',
-        re.MULTILINE,
-    )
-    return {
-        node_id: {
-            "type": normalize_dot_value(node_type),
-            "offset": normalize_dot_value(offset),
-        }
-        for node_id, node_type, offset in pattern.findall(graph_text)
-    }
-
-
-def parse_edges(graph_text: str) -> set[tuple[str, str]]:
-    if not isinstance(graph_text, str):
-        return set()
-    graph_text = restore_graph_newlines(graph_text)
-    pattern = re.compile(r"^\s*(\d+)\s*->\s*(\d+);", re.MULTILINE)
-    return set(pattern.findall(graph_text))
-
-
-def prf(tp: int, pred_total: int, gt_total: int) -> tuple[float, float, float]:
-    precision = tp / pred_total if pred_total else 0.0
-    recall = tp / gt_total if gt_total else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return precision, recall, f1
-
-
-def node_match_score(pred_node: dict[str, str], gt_node: dict[str, str]) -> float:
-    if pred_node["type"] != gt_node["type"]:
-        return 0.0
-    return range_iou(parse_offset(pred_node["offset"]), parse_offset(gt_node["offset"]))
-
-
-def match_nodes(
-    pred_nodes: dict[str, dict[str, str]],
-    gt_nodes: dict[str, dict[str, str]],
-) -> list[tuple[str, str, float]]:
-    matched_pairs = []
-    used_gt = set()
-
-    for pred_id, pred_node in pred_nodes.items():
-        best_gt_id = None
-        best_score = 0.0
-
-        for gt_id, gt_node in gt_nodes.items():
-            if gt_id in used_gt:
-                continue
-
-            score = node_match_score(pred_node, gt_node)
-            if score > best_score:
-                best_score = score
-                best_gt_id = gt_id
-
-        if best_gt_id is not None and best_score >= CFG_NODE_SIM_THRESHOLD:
-            matched_pairs.append((pred_id, best_gt_id, best_score))
-            used_gt.add(best_gt_id)
-
-    return matched_pairs
-
-
-def mapped_pred_edges(
-    pred_edges: set[tuple[str, str]],
-    matched_pairs: list[tuple[str, str, float]],
-) -> set[tuple[str, str]]:
-    pred_to_gt = {pred_id: gt_id for pred_id, gt_id, _ in matched_pairs}
-    result = set()
-    for source, target in pred_edges:
-        if source in pred_to_gt and target in pred_to_gt:
-            result.add((pred_to_gt[source], pred_to_gt[target]))
-    return result
-
-
-def mean(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
-
-
-def graph_metrics(pred_cfg: str, gt_cfg: str) -> dict[str, float | int]:
-    pred_nodes = parse_nodes(pred_cfg)
-    gt_nodes = parse_nodes(gt_cfg)
-    pred_edges = parse_edges(pred_cfg)
-    gt_edges = parse_edges(gt_cfg)
-
-    matched_pairs = match_nodes(pred_nodes, gt_nodes)
-    node_tp = len(matched_pairs)
-    pred_node_total = len(pred_nodes)
-    gt_node_total = len(gt_nodes)
-    node_p, node_r, node_f1 = prf(node_tp, pred_node_total, gt_node_total)
-
-    pred_edges_mapped = mapped_pred_edges(pred_edges, matched_pairs)
-    edge_tp = len(pred_edges_mapped & gt_edges)
-    pred_edge_total = len(pred_edges_mapped)
-    gt_edge_total = len(gt_edges)
-    edge_p, edge_r, edge_f1 = prf(edge_tp, pred_edge_total, gt_edge_total)
-
-    return {
-        "node_precision": node_p,
-        "node_recall": node_r,
-        "node_f1": node_f1,
-        "edge_precision": edge_p,
-        "edge_recall": edge_r,
-        "edge_f1": edge_f1,
-        "node_exact": int(node_f1 == 1.0 and pred_node_total == gt_node_total),
-        "edge_exact": int(edge_f1 == 1.0 and pred_edge_total == gt_edge_total),
-        "graph_exact": int(
-            node_f1 == 1.0
-            and edge_f1 == 1.0
-            and pred_node_total == gt_node_total
-            and pred_edge_total == gt_edge_total
-        ),
-        "node_tp": node_tp,
-        "pred_node_total": pred_node_total,
-        "gt_node_total": gt_node_total,
-        "edge_tp": edge_tp,
-        "pred_edge_total": len(pred_edges),
-        "mapped_pred_edge_total": pred_edge_total,
-        "gt_edge_total": gt_edge_total,
-        "avg_node_match_score": mean([score for _, _, score in matched_pairs]),
-    }
-
-
-def to_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() == "true"
-    return bool(value)
-
-
-def new_summary() -> dict:
-    return {
-        "count": 0,
-        "node_precision": [],
-        "node_recall": [],
-        "node_f1": [],
-        "edge_precision": [],
-        "edge_recall": [],
-        "edge_f1": [],
-        "node_exact": 0,
-        "edge_exact": 0,
-        "graph_exact": 0,
-    }
-
-
-def update_summary(summary: dict, metrics: dict[str, float | int]) -> None:
-    summary["count"] += 1
-    for key in [
-        "node_precision",
-        "node_recall",
-        "node_f1",
-        "edge_precision",
-        "edge_recall",
-        "edge_f1",
-    ]:
-        summary[key].append(float(metrics[key]))
-    for key in ["node_exact", "edge_exact", "graph_exact"]:
-        summary[key] += int(metrics[key])
-
-
-def print_summary(title: str, summary: dict) -> None:
-    count = summary["count"]
-    print("=" * 72)
-    print(title)
-    print("=" * 72)
-    print(f"samples={count}")
-    print(f"node_precision={mean(summary['node_precision']):.4f}")
-    print(f"node_recall={mean(summary['node_recall']):.4f}")
-    print(f"node_f1={mean(summary['node_f1']):.4f}")
-    print(f"edge_precision={mean(summary['edge_precision']):.4f}")
-    print(f"edge_recall={mean(summary['edge_recall']):.4f}")
-    print(f"edge_f1={mean(summary['edge_f1']):.4f}")
-    print(f"node_exact={summary['node_exact'] / count if count else 0:.4f}")
-    print(f"edge_exact={summary['edge_exact'] / count if count else 0:.4f}")
-    print(f"graph_exact={summary['graph_exact'] / count if count else 0:.4f}")
-    print()
-
-
-def summary_row(split_name: str, summary: dict) -> dict[str, float | int | str]:
-    count = summary["count"]
-    return {
-        "split": split_name,
-        "graph_type": "CFG",
-        "samples": count,
-        "node_precision": mean(summary["node_precision"]),
-        "node_recall": mean(summary["node_recall"]),
-        "node_f1": mean(summary["node_f1"]),
-        "edge_precision": mean(summary["edge_precision"]),
-        "edge_recall": mean(summary["edge_recall"]),
-        "edge_f1": mean(summary["edge_f1"]),
-        "node_exact": summary["node_exact"] / count if count else 0.0,
-        "edge_exact": summary["edge_exact"] / count if count else 0.0,
-        "graph_exact": summary["graph_exact"] / count if count else 0.0,
-    }
-
-
-def save_metrics_summary(metrics_file: str, summaries: list[tuple[str, dict]]) -> None:
-    rows = [summary_row(split_name, summary) for split_name, summary in summaries]
-    fieldnames = [
-        "split",
-        "graph_type",
-        "samples",
-        "node_precision",
-        "node_recall",
-        "node_f1",
-        "edge_precision",
-        "edge_recall",
-        "edge_f1",
-        "node_exact",
-        "edge_exact",
-        "graph_exact",
-    ]
-    Path(metrics_file).parent.mkdir(parents=True, exist_ok=True)
-    with open(metrics_file, mode="w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def load_examples(
@@ -464,25 +178,28 @@ def evaluate() -> None:
         )
 
         prediction = generate_cfg(model, tokenizer, example["code"], args.max_new_tokens)
-        pred_cfg = extract_cfg(prediction)
-        gt_cfg = restore_graph_newlines(example["CFG"])
-        metrics = graph_metrics(pred_cfg, gt_cfg)
+        pred_cfg = normalize_graph_for_metrics(extract_graph(prediction, "CFG"), "CFG")
+        gt_cfg = normalize_graph_for_metrics(example["CFG"], "CFG")
+        metrics = graph_metrics(pred_cfg, gt_cfg, "CFG")
 
-        update_summary(overall_summary, metrics)
+        update_summary(overall_summary, "CFG", metrics)
         target_summary = error_summary if to_bool(example["is_error"]) else clean_summary
-        update_summary(target_summary, metrics)
+        update_summary(target_summary, "CFG", metrics)
 
-        row = {
-            "code": example["code"],
-            "language": example["language"],
-            "is_error": example["is_error"],
-            "CFG": gt_cfg,
-            "predict": prediction,
-            "predict_CFG": pred_cfg,
-        }
-        for metric_name, metric_value in metrics.items():
-            row[f"CFG_{metric_name}"] = metric_value
-        rows.append(row)
+        rows.append(
+            {
+                "code": example["code"],
+                "language": example["language"],
+                "is_error": example["is_error"],
+                "CFG": gt_cfg,
+                "predict": prediction,
+                "predict_CFG": pred_cfg,
+                "CFG_Node-F1": metrics["node_f1"],
+                "CFG_Edge-F1": metrics["edge_f1"],
+                "CFG_Node-EM": metrics["node_exact"],
+                "CFG_Node-ZM": metrics["node_zero"],
+            }
+        )
 
         if index <= args.preview_samples:
             print(prediction[:1200])
@@ -503,11 +220,12 @@ def evaluate() -> None:
             ("is_error_false", clean_summary),
             ("is_error_true", error_summary),
         ],
+        GRAPH_TYPES,
     )
     print(f"Saved metric summary to {metrics_file}")
-    print_summary("Overall CFG", overall_summary)
-    print_summary("is_error=False CFG", clean_summary)
-    print_summary("is_error=True CFG", error_summary)
+    print_summary("overall", overall_summary, GRAPH_TYPES)
+    print_summary("is_error_false", clean_summary, GRAPH_TYPES)
+    print_summary("is_error_true", error_summary, GRAPH_TYPES)
 
 
 if __name__ == "__main__":
