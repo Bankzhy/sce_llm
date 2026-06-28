@@ -11,10 +11,13 @@ from unsloth import FastLanguageModel
 csv.field_size_limit(200_000_000)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+EVAL_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+if str(EVAL_DIR) not in sys.path:
+    sys.path.insert(0, str(EVAL_DIR))
 
-from eval.graph_eval_common import (
+from graph_eval_common import (
     clean_prediction,
     extract_graph,
     graph_metrics,
