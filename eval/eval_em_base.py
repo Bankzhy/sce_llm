@@ -15,7 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_VALID_FILE = ROOT_DIR / "dataset" / "em_valid.json"
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "em_test.json"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5-coder:7b"
+DEFAULT_MODEL = "codellama:7b"
 
 SYSTEM_PROMPT = "You are a code refactoring expert."
 
