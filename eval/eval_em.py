@@ -12,7 +12,7 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_VALID_FILE = ROOT_DIR / "dataset" / "em_valid.json"
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "em_test.json"
-DEFAULT_MODEL_DIR = "unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit"
+DEFAULT_MODEL_DIR = "Qwen/Qwen2.5-Coder-7B-Instruct"
 
 EM_INSTRUCTION = """You are a Code refactoring expert.
 Analyze the given method and identify all code regions that are suitable for Extract Method refactoring.
@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--max-new-tokens", type=int, default=1024)
-    parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--max-valid-samples", type=int, default=None)
     parser.add_argument("--max-test-samples", type=int, default=None)
     parser.add_argument(
