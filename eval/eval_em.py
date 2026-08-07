@@ -16,9 +16,18 @@ DEFAULT_MODEL_DIR = "unsloth/codellama-7b-bnb-4bit"
 
 EM_INSTRUCTION = """You are a Code refactoring expert.
 Analyze the given method and identify all code regions that are suitable for Extract Method refactoring.
-For each opportunity, locate the code region, propose a meaningful extracted method signature, and explain why the extraction improves the code.
-Use the input method's original line numbering when locating a region.
-Return only the identified Extract Method opportunities. If none exist, state that no suitable opportunity was found."""
+For every opportunity, you MUST provide both the exact extractable line range and a reason explaining why the extraction improves the code.
+Number the input method's lines starting from 1, including annotations and the method declaration, and report each region using the inclusive format "Lines: <start>-<end>".
+Also propose a meaningful extracted method signature.
+
+Return only the identified opportunities in exactly this format:
+Opportunity 1
+Extracted method: <method signature>
+Lines: <start line>-<end line>
+Reason: <reason for extraction>
+
+Repeat the same four fields for each additional opportunity. Do not omit Lines or Reason.
+If no suitable opportunity exists, return exactly: No suitable Extract Method opportunity was found."""
 
 ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
