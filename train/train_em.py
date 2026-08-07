@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         description="Fine-tune a lightweight LLM for Extract Method recommendation."
     )
     parser.add_argument("--train-file", default=str(DEFAULT_TRAIN_FILE))
-    parser.add_argument("--model-name", default="unsloth/Llama-3.2-3B-Instruct-bnb-4bit")
+    parser.add_argument("--model-name", default="unsloth/Qwen3-4B-unsloth-bnb-4bit")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--save-dir", default=None)
     parser.add_argument("--max-seq-length", type=int, default=4096)
