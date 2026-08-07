@@ -121,14 +121,37 @@ def build_prompt(code: str) -> str:
     return ALPACA_PROMPT.format(EM_INSTRUCTION, code, "")
 
 
+def build_user_message(code: str) -> str:
+    return f"{EM_INSTRUCTION}\n\nInput method:\n{code}"
+
+
+def tokenize_prompt(tokenizer, code: str, device):
+    """Tokenize with the model's chat template, falling back to Alpaca."""
+    if getattr(tokenizer, "chat_template", None):
+        inputs = tokenizer.apply_chat_template(
+            [{"role": "user", "content": build_user_message(code)}],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+        )
+    else:
+        inputs = tokenizer(build_prompt(code), return_tensors="pt")
+    return inputs.to(device)
+
+
 def generate_prediction(model, tokenizer, code: str, max_new_tokens: int) -> str:
-    inputs = tokenizer(build_prompt(code), return_tensors="pt").to(model.device)
+    inputs = tokenize_prompt(tokenizer, code, model.device)
     outputs = model.generate(
         **inputs,
         max_new_tokens=max_new_tokens,
         do_sample=False,
         use_cache=True,
-        pad_token_id=tokenizer.eos_token_id,
+        pad_token_id=(
+            tokenizer.pad_token_id
+            if tokenizer.pad_token_id is not None
+            else tokenizer.eos_token_id
+        ),
     )
     generated_tokens = outputs[0, inputs.input_ids.shape[1] :]
     return tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
