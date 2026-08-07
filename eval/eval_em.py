@@ -12,22 +12,13 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_VALID_FILE = ROOT_DIR / "dataset" / "em_valid.json"
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "em_test.json"
-DEFAULT_MODEL_DIR = "Qwen/Qwen2.5-Coder-7B-Instruct"
+DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_em_unsloth_codellama_7b_bnb_4bit"
 
 EM_INSTRUCTION = """You are a Code refactoring expert.
 Analyze the given method and identify all code regions that are suitable for Extract Method refactoring.
-For every opportunity, you MUST provide both the exact extractable line range and a reason explaining why the extraction improves the code.
-Number the input method's lines starting from 1, including annotations and the method declaration, and report each region using the inclusive format "Lines: <start>-<end>".
-Also propose a meaningful extracted method signature.
-
-Return only the identified opportunities in exactly this format:
-Opportunity 1
-Extracted method: <method signature>
-Lines: <start line>-<end line>
-Reason: <reason for extraction>
-
-Repeat the same four fields for each additional opportunity. Do not omit Lines or Reason.
-If no suitable opportunity exists, return exactly: No suitable Extract Method opportunity was found."""
+For each opportunity, locate the code region, propose a meaningful extracted method signature, and explain why the extraction improves the code.
+Use the input method's original line numbering when locating a region.
+Return only the identified Extract Method opportunities. If none exist, state that no suitable opportunity was found."""
 
 ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
@@ -63,13 +54,17 @@ def model_result_name(model_dir: str) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run an Extract Method model on em_valid.json and em_test.json, "
-            "saving one prediction per text file."
+            "Evaluate a fine-tuned Extract Method model on em_valid.json and "
+            "em_test.json, saving one prediction per text file."
         )
     )
     parser.add_argument("--valid-file", default=str(DEFAULT_VALID_FILE))
     parser.add_argument("--test-file", default=str(DEFAULT_TEST_FILE))
-    parser.add_argument("--model-dir", default=str(DEFAULT_MODEL_DIR))
+    parser.add_argument(
+        "--model-dir",
+        default=str(DEFAULT_MODEL_DIR),
+        help="Fine-tuned LoRA model directory produced by train/train_em.py.",
+    )
     parser.add_argument(
         "--output-dir",
         default=None,
@@ -77,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--max-new-tokens", type=int, default=1024)
-    parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-valid-samples", type=int, default=None)
     parser.add_argument("--max-test-samples", type=int, default=None)
     parser.add_argument(
@@ -121,27 +116,8 @@ def build_prompt(code: str) -> str:
     return ALPACA_PROMPT.format(EM_INSTRUCTION, code, "")
 
 
-def build_user_message(code: str) -> str:
-    return f"{EM_INSTRUCTION}\n\nInput method:\n{code}"
-
-
-def tokenize_prompt(tokenizer, code: str, device):
-    """Tokenize with the model's chat template, falling back to Alpaca."""
-    if getattr(tokenizer, "chat_template", None):
-        inputs = tokenizer.apply_chat_template(
-            [{"role": "user", "content": build_user_message(code)}],
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True,
-        )
-    else:
-        inputs = tokenizer(build_prompt(code), return_tensors="pt")
-    return inputs.to(device)
-
-
 def generate_prediction(model, tokenizer, code: str, max_new_tokens: int) -> str:
-    inputs = tokenize_prompt(tokenizer, code, model.device)
+    inputs = tokenizer(build_prompt(code), return_tensors="pt").to(model.device)
     outputs = model.generate(
         **inputs,
         max_new_tokens=max_new_tokens,
