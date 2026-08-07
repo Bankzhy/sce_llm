@@ -4,7 +4,9 @@
 import argparse
 import csv
 import json
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,14 @@ DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "em_test.json"
 LINE_RANGE_PATTERN = re.compile(
     r"\bLines?\s*:\s*\[?\s*(\d+)\s*(?:-|–|—|,|\bto\b)\s*(\d+)\s*\]?",
     flags=re.IGNORECASE,
+)
+OPPORTUNITY_PATTERN = re.compile(
+    r"(?=^\s*Opportunity\s+\d+\b)",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+REASON_PATTERN = re.compile(
+    r"\bReason\s*:\s*(.*)",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -96,11 +106,21 @@ def load_records(json_file: str) -> list[dict[str, Any]]:
 
 
 def ground_truth_ranges(record: dict[str, Any], sample_id: str) -> set[tuple[int, int]]:
+    return {
+        opportunity["range"]
+        for opportunity in ground_truth_opportunities(record, sample_id)
+    }
+
+
+def ground_truth_opportunities(
+    record: dict[str, Any],
+    sample_id: str,
+) -> list[dict[str, Any]]:
     opportunities = record.get("opportunities")
     if not isinstance(opportunities, list):
         raise ValueError(f"Sample {sample_id}: opportunities must be an array.")
 
-    ranges: set[tuple[int, int]] = set()
+    parsed: list[dict[str, Any]] = []
     for opportunity in opportunities:
         if not isinstance(opportunity, dict):
             raise ValueError(f"Sample {sample_id}: opportunity must be an object.")
@@ -114,16 +134,43 @@ def ground_truth_ranges(record: dict[str, Any], sample_id: str) -> set[tuple[int
                 f"Sample {sample_id}: merged_method_lines must be [start, end]."
             )
         start, end = lines
-        ranges.add((min(start, end), max(start, end)))
-    return ranges
+        explanation = opportunity.get("explanation", "")
+        parsed.append(
+            {
+                "range": (min(start, end), max(start, end)),
+                "reason": str(explanation).strip(),
+            }
+        )
+    return parsed
 
 
 def predicted_ranges(prediction: str) -> set[tuple[int, int]]:
-    cleaned = prediction.replace("*", "").replace("`", "")
     return {
-        (min(int(start), int(end)), max(int(start), int(end)))
-        for start, end in LINE_RANGE_PATTERN.findall(cleaned)
+        opportunity["range"]
+        for opportunity in predicted_opportunities(prediction)
     }
+
+
+def predicted_opportunities(prediction: str) -> list[dict[str, Any]]:
+    cleaned = prediction.replace("*", "").replace("`", "")
+    blocks = [block for block in OPPORTUNITY_PATTERN.split(cleaned) if block.strip()]
+    if not blocks:
+        blocks = [cleaned]
+
+    parsed: list[dict[str, Any]] = []
+    for block in blocks:
+        line_match = LINE_RANGE_PATTERN.search(block)
+        if not line_match:
+            continue
+        start, end = map(int, line_match.groups())
+        reason_match = REASON_PATTERN.search(block)
+        parsed.append(
+            {
+                "range": (min(start, end), max(start, end)),
+                "reason": reason_match.group(1).strip() if reason_match else "",
+            }
+        )
+    return parsed
 
 
 def prediction_file(
@@ -170,33 +217,143 @@ def lines_text(lines: set[int]) -> str:
     return ";".join(str(line) for line in sorted(lines))
 
 
+def text_tokens(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9_]+|[^\w\s]", text.lower(), flags=re.UNICODE)
+
+
+def ngrams(tokens: list[str], order: int) -> list[tuple[str, ...]]:
+    return [
+        tuple(tokens[index : index + order])
+        for index in range(len(tokens) - order + 1)
+    ]
+
+
+def sentence_bleu4(reference: str, prediction: str) -> float:
+    """Calculate sentence BLEU-4 with add-one smoothing."""
+    reference_tokens = text_tokens(reference)
+    prediction_tokens = text_tokens(prediction)
+    if not reference_tokens or not prediction_tokens:
+        return 0.0
+
+    log_precisions = []
+    for order in range(1, 5):
+        pred_counts = Counter(ngrams(prediction_tokens, order))
+        ref_counts = Counter(ngrams(reference_tokens, order))
+        clipped = sum(
+            min(count, ref_counts[gram]) for gram, count in pred_counts.items()
+        )
+        total = sum(pred_counts.values())
+        precision = (clipped + 1) / (total + 1)
+        log_precisions.append(math.log(precision))
+
+    prediction_length = len(prediction_tokens)
+    reference_length = len(reference_tokens)
+    brevity_penalty = (
+        1.0
+        if prediction_length > reference_length
+        else math.exp(1 - reference_length / prediction_length)
+    )
+    return brevity_penalty * math.exp(sum(log_precisions) / 4)
+
+
+def lcs_length(left: list[str], right: list[str]) -> int:
+    if len(left) > len(right):
+        left, right = right, left
+    previous = [0] * (len(left) + 1)
+    for right_token in right:
+        current = [0]
+        for index, left_token in enumerate(left, start=1):
+            if left_token == right_token:
+                current.append(previous[index - 1] + 1)
+            else:
+                current.append(max(previous[index], current[-1]))
+        previous = current
+    return previous[-1]
+
+
+def rouge_l_f1(reference: str, prediction: str) -> float:
+    reference_tokens = text_tokens(reference)
+    prediction_tokens = text_tokens(prediction)
+    if not reference_tokens or not prediction_tokens:
+        return 0.0
+    common = lcs_length(reference_tokens, prediction_tokens)
+    precision = common / len(prediction_tokens)
+    recall = common / len(reference_tokens)
+    return (
+        2 * precision * recall / (precision + recall)
+        if precision + recall
+        else 0.0
+    )
+
+
+def range_lines(line_range: tuple[int, int]) -> set[int]:
+    start, end = line_range
+    return set(range(start, end + 1))
+
+
+def match_opportunities(
+    predicted: list[dict[str, Any]],
+    ground_truth: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Pair opportunities one-to-one by greatest line overlap."""
+    candidates = []
+    for pred_index, pred in enumerate(predicted):
+        pred_lines = range_lines(pred["range"])
+        for gt_index, gt in enumerate(ground_truth):
+            gt_lines = range_lines(gt["range"])
+            intersection = len(pred_lines & gt_lines)
+            if intersection:
+                union = len(pred_lines | gt_lines)
+                candidates.append(
+                    (intersection, intersection / union, pred_index, gt_index)
+                )
+
+    matches = []
+    used_pred = set()
+    used_gt = set()
+    for _, _, pred_index, gt_index in sorted(candidates, reverse=True):
+        if pred_index in used_pred or gt_index in used_gt:
+            continue
+        used_pred.add(pred_index)
+        used_gt.add(gt_index)
+        matches.append((predicted[pred_index], ground_truth[gt_index]))
+    return matches
+
+
 def evaluate_split(
     split: str,
     json_file: str,
     results_dir: Path,
-) -> tuple[Counts, list[dict[str, Any]], int, int]:
+) -> tuple[Counts, list[dict[str, Any]], int, int, list[float], list[float]]:
     records = load_records(json_file)
     summary = Counts()
     rows: list[dict[str, Any]] = []
     missing_files = 0
     unparsed_files = 0
+    bleu_scores: list[float] = []
+    rouge_scores: list[float] = []
 
     for index, record in enumerate(records, start=1):
         if not isinstance(record, dict):
             raise ValueError(f"{json_file}: record {index - 1} must be an object.")
 
         sample_id = str(record.get("id", index - 1))
-        gt_ranges = ground_truth_ranges(record, sample_id)
+        gt_opportunities = ground_truth_opportunities(record, sample_id)
+        gt_ranges = {opportunity["range"] for opportunity in gt_opportunities}
         result_file = prediction_file(results_dir, split, index, sample_id)
 
         file_exists = result_file.exists()
         if file_exists:
             prediction = result_file.read_text(encoding="utf-8")
-            pred_ranges = predicted_ranges(prediction)
+            pred_opportunities = predicted_opportunities(prediction)
+            pred_ranges = {
+                opportunity["range"] for opportunity in pred_opportunities
+            }
             if not pred_ranges:
                 unparsed_files += 1
         else:
             prediction = ""
+            pred_opportunities = []
             pred_ranges = set()
             missing_files += 1
 
@@ -205,6 +362,24 @@ def evaluate_split(
         counts = line_counts(pred_ranges, gt_ranges)
         summary.add(counts)
         sample_metrics = counts.metrics()
+        reason_pairs = [
+            (pred["reason"], gt["reason"])
+            for pred, gt in match_opportunities(
+                pred_opportunities,
+                gt_opportunities,
+            )
+            if pred["reason"] and gt["reason"]
+        ]
+        sample_bleu = [
+            sentence_bleu4(reference, predicted)
+            for predicted, reference in reason_pairs
+        ]
+        sample_rouge = [
+            rouge_l_f1(reference, predicted)
+            for predicted, reference in reason_pairs
+        ]
+        bleu_scores.extend(sample_bleu)
+        rouge_scores.extend(sample_rouge)
         rows.append(
             {
                 "split": split,
@@ -216,11 +391,25 @@ def evaluate_split(
                 "ground_truth_ranges": ranges_text(gt_ranges),
                 "predicted_lines": lines_text(pred_lines),
                 "ground_truth_lines": lines_text(gt_lines),
+                "matched_reason_pairs": len(reason_pairs),
+                "Reason_BLEU4": (
+                    sum(sample_bleu) / len(sample_bleu) if sample_bleu else 0.0
+                ),
+                "Reason_ROUGE_L_F1": (
+                    sum(sample_rouge) / len(sample_rouge) if sample_rouge else 0.0
+                ),
                 **sample_metrics,
             }
         )
 
-    return summary, rows, missing_files, unparsed_files
+    return (
+        summary,
+        rows,
+        missing_files,
+        unparsed_files,
+        bleu_scores,
+        rouge_scores,
+    )
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -249,9 +438,11 @@ def main() -> None:
     overall_samples = 0
     overall_missing = 0
     overall_unparsed = 0
+    overall_bleu: list[float] = []
+    overall_rouge: list[float] = []
 
     for split in selected_splits:
-        counts, rows, missing, unparsed = evaluate_split(
+        counts, rows, missing, unparsed, bleu_scores, rouge_scores = evaluate_split(
             split,
             dataset_files[split],
             results_dir,
@@ -261,12 +452,21 @@ def main() -> None:
         overall_samples += len(rows)
         overall_missing += missing
         overall_unparsed += unparsed
+        overall_bleu.extend(bleu_scores)
+        overall_rouge.extend(rouge_scores)
         summary_rows.append(
             {
                 "split": split,
                 "samples": len(rows),
                 "missing_prediction_files": missing,
                 "unparsed_prediction_files": unparsed,
+                "matched_reason_pairs": len(bleu_scores),
+                "Reason_BLEU4": (
+                    sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0.0
+                ),
+                "Reason_ROUGE_L_F1": (
+                    sum(rouge_scores) / len(rouge_scores) if rouge_scores else 0.0
+                ),
                 **counts.metrics(),
             }
         )
@@ -277,6 +477,15 @@ def main() -> None:
             "samples": overall_samples,
             "missing_prediction_files": overall_missing,
             "unparsed_prediction_files": overall_unparsed,
+            "matched_reason_pairs": len(overall_bleu),
+            "Reason_BLEU4": (
+                sum(overall_bleu) / len(overall_bleu) if overall_bleu else 0.0
+            ),
+            "Reason_ROUGE_L_F1": (
+                sum(overall_rouge) / len(overall_rouge)
+                if overall_rouge
+                else 0.0
+            ),
             **overall.metrics(),
         }
     )
@@ -296,6 +505,9 @@ def main() -> None:
             f"TP={row['TP']} FP={row['FP']} FN={row['FN']} "
             f"precision={row['Precision']:.6f} "
             f"recall={row['Recall']:.6f} F1={row['F1']:.6f} "
+            f"reason_pairs={row['matched_reason_pairs']} "
+            f"BLEU4={row['Reason_BLEU4']:.6f} "
+            f"ROUGE-L-F1={row['Reason_ROUGE_L_F1']:.6f} "
             f"missing={row['missing_prediction_files']} "
             f"unparsed={row['unparsed_prediction_files']}"
         )
