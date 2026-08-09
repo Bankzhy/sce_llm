@@ -14,7 +14,7 @@ DEFAULT_VALID_FILE = ROOT_DIR / "dataset" / "em_valid.json"
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "em_test.json"
 DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_em_unsloth_codellama_7b_bnb_4bit"
 
-EM_PROMPT = """Analyze the following method and identify all code regions suitable for Extract Method refactoring.
+EM_INSTRUCTION = """Analyze the following method and identify all code regions suitable for Extract Method refactoring.
 
 For every opportunity:
 1. Propose a meaningful extracted method signature.
