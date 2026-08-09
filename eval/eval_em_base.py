@@ -15,7 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_VALID_FILE = ROOT_DIR / "dataset" / "em_valid.json"
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "em_test.json"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen3:4b-instruct"
+DEFAULT_MODEL = "codellama:7b"
 
 SYSTEM_PROMPT = "You are a code refactoring expert."
 
@@ -24,7 +24,7 @@ EM_PROMPT = """Analyze the following method and identify all code regions suitab
 For every opportunity:
 1. Propose a meaningful extracted method signature.
 2. Give the exact inclusive line range using the input method's line numbers.
-3. Explain why extracting the region improves the code.
+3. Explain why extracting the selected region improves the code from three aspects: method length, method complexity, and method functionality.
 
 Count lines from 1. Annotations and the method declaration count as lines.
 Return only the opportunities in exactly this format:
