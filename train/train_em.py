@@ -12,11 +12,23 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "em_train.json"
 
-EM_INSTRUCTION = """You are a Code refactoring expert.
-Analyze the given method and identify all code regions that are suitable for Extract Method refactoring.
-For each opportunity, locate the code region, propose a meaningful extracted method signature, and explain why the extraction improves the code.
-Use the input method's original line numbering when locating a region.
-Return only the identified Extract Method opportunities. If none exist, state that no suitable opportunity was found."""
+EM_INSTRUCTION = """Analyze the following method and identify all code regions suitable for Extract Method refactoring.
+
+For every opportunity:
+1. Propose a meaningful extracted method signature.
+2. Give the exact inclusive line range using the input method's line numbers.
+3. Explain why extracting the selected region improves the code from three aspects: method length, method complexity, and method functionality.
+
+Count lines from 1. Annotations and the method declaration count as lines.
+Return only the opportunities in exactly this format:
+
+Opportunity 1
+Extracted method: <method signature>
+Lines: <start line>-<end line>
+Reason: <reason for extraction>
+
+Input method:
+{}"""
 
 ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
