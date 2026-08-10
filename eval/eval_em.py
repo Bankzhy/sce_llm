@@ -12,7 +12,7 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_VALID_FILE = ROOT_DIR / "dataset" / "em_valid.json"
 DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "em_test.json"
-DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_em_unsloth_codellama_7b_bnb_4bit"
+DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_em_unsloth_qwen2_5_coder_7b_instruct_bnb_4bit"
 
 EM_INSTRUCTION = """Analyze the following method and identify all code regions suitable for Extract Method refactoring.
 
