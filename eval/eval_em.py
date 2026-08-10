@@ -212,7 +212,11 @@ def main() -> None:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Import Unsloth before Transformers/TRL so its runtime patches are applied.
+    # Match the working training import order to initialize Torch Inductor safely.
+    import torch
+    from datasets import Dataset  # noqa: F401
+    from transformers import TrainingArguments  # noqa: F401
+    from trl import SFTTrainer  # noqa: F401
     from unsloth import FastLanguageModel
 
     model, tokenizer = FastLanguageModel.from_pretrained(
