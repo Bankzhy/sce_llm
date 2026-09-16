@@ -77,7 +77,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lora-dropout", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument("--max-samples", type=int)
-    parser.add_argument("--eval-ratio", type=float, default=0.05)
     parser.add_argument(
         "--packing", action=argparse.BooleanOptionalAction, default=False
     )
@@ -114,8 +113,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--max-seq-length must be at least 256")
     if args.max_samples is not None and args.max_samples < 1:
         parser.error("--max-samples must be at least 1")
-    if not 0 <= args.eval_ratio < 1:
-        parser.error("--eval-ratio must be in [0, 1)")
     if args.per_device_train_batch_size < 1:
         parser.error("--per-device-train-batch-size must be at least 1")
     if args.gradient_accumulation_steps < 1:
@@ -421,18 +418,11 @@ def main() -> None:
 
     dataset = Dataset.from_list(formatted_examples)
 
-    eval_dataset = None
-    if args.eval_ratio > 0 and len(dataset) > 1:
-        split = dataset.train_test_split(test_size=args.eval_ratio, seed=args.seed)
-        train_dataset = split["train"]
-        eval_dataset = split["test"]
-    else:
-        train_dataset = dataset
+    train_dataset = dataset
 
     print(f"loaded_examples: {original_count}")
     print(f"overlength_examples_dropped: {dropped_count}")
     print(f"train_examples: {len(train_dataset)}")
-    print(f"eval_examples: {len(eval_dataset) if eval_dataset is not None else 0}")
 
     training_values = {
         "per_device_train_batch_size": args.per_device_train_batch_size,
@@ -452,9 +442,8 @@ def main() -> None:
         "output_dir": args.output_dir,
         "seed": args.seed,
         "report_to": "none",
-        "eval_strategy": "steps" if eval_dataset is not None else "no",
-        "evaluation_strategy": "steps" if eval_dataset is not None else "no",
-        "eval_steps": args.save_steps,
+        "eval_strategy": "no",
+        "evaluation_strategy": "no",
     }
 
     if SFTConfig is None:
@@ -473,7 +462,6 @@ def main() -> None:
     trainer_values: dict[str, Any] = {
         "model": model,
         "train_dataset": train_dataset,
-        "eval_dataset": eval_dataset,
         "args": trainer_args,
     }
     trainer_parameters = inspect.signature(SFTTrainer.__init__).parameters
