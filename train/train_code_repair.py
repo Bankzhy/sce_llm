@@ -24,6 +24,24 @@ DEFAULT_TRAIN_FILES = (
 DEFAULT_MODEL = "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit"
 EXPECTED_ROLES = ("system", "user", "assistant")
 
+SYSTEM_PROMPT = """You only repair {language} syntax and incomplete control structures. Unresolved symbols are allowed. Never invent methods, classes, imports, or business logic. Return only the repaired source."""
+
+USER_PROMPT = """Repair the incomplete or invalid {language} source below so it can be parsed.
+
+Make the smallest possible changes. Preserve existing lines, indentation, names, conditions, and statements whenever possible. Add only what is needed to complete the syntax and control structures.
+
+Unresolved method calls, variables, and types are valid for this task. Never add definitions for referenced symbols. Do not add imports, comments, helper methods, classes, or new business statements.
+
+Prefer appending missing braces or tokens without moving existing lines. Do not redesign or explain the code.
+
+Parser error: {static_error}
+File: {file_name}
+
+Return the entire repaired file inside one `{language}` code block and nothing else.
+```{language}
+{source_code}
+```"""
+
 
 def model_suffix_from_name(model_name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "_", model_name).strip("_").lower()
@@ -151,12 +169,97 @@ def validate_record(record: Any, path: Path, line_number: int) -> dict[str, Any]
             f"Sample {sample_id}: assistant answer does not match fixed_code."
         )
 
+    mutation = record.get("mutation")
+    if not isinstance(mutation, dict):
+        raise ValueError(f"Sample {sample_id}: mutation must be an object.")
+    failure_class = mutation.get("failure_class")
+    if not isinstance(failure_class, str) or not failure_class:
+        raise ValueError(f"Sample {sample_id}: mutation.failure_class is required.")
+
+    source = record.get("source")
+    if source is None:
+        source = {}
+    if not isinstance(source, dict):
+        raise ValueError(f"Sample {sample_id}: source must be an object.")
+
+    file_name = infer_file_name(source, language, sample_id)
+    static_error = build_static_error(record, mutation)
+    training_messages = build_training_messages(
+        language=language,
+        static_error=static_error,
+        file_name=file_name,
+        buggy_code=buggy_code,
+        fixed_code=fixed_code,
+    )
+
     return {
         "id": sample_id,
         "language": language,
-        "messages": validated_messages,
-        "mutation_type": str(record.get("mutation", {}).get("mutation_type", "")),
+        "messages": training_messages,
+        "mutation_type": str(mutation.get("mutation_type", "")),
+        "failure_class": failure_class,
+        "file_name": file_name,
+        "static_error": static_error,
     }
+
+
+def infer_file_name(source: dict[str, Any], language: str, sample_id: str) -> str:
+    source_path = source.get("path")
+    if isinstance(source_path, str) and source_path.strip():
+        return Path(source_path).name
+
+    function_name = source.get("func_name")
+    extension = ".java" if language == "java" else ".py"
+    if isinstance(function_name, str) and function_name.strip():
+        clean_name = function_name.strip()
+        if language == "java" and "." in clean_name:
+            clean_name = clean_name.rsplit(".", 1)[0].rsplit(".", 1)[-1]
+        else:
+            clean_name = clean_name.rsplit(".", 1)[-1]
+        clean_name = re.sub(r"[^A-Za-z0-9_$-]+", "_", clean_name).strip("_")
+        if clean_name:
+            return clean_name + extension
+    return sample_id + extension
+
+
+def build_static_error(record: dict[str, Any], mutation: dict[str, Any]) -> str:
+    supplied_error = record.get("static_error")
+    if isinstance(supplied_error, str) and supplied_error.strip():
+        return supplied_error.strip()
+    line = mutation.get("line")
+    column = mutation.get("column")
+    if isinstance(line, int) and isinstance(column, int):
+        return f"Tree-sitter parse error near line {line}, column {column}."
+    return "Tree-sitter reported an invalid or incomplete syntax structure."
+
+
+def build_training_messages(
+    *,
+    language: str,
+    static_error: str,
+    file_name: str,
+    buggy_code: str,
+    fixed_code: str,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT.format(language=language),
+        },
+        {
+            "role": "user",
+            "content": USER_PROMPT.format(
+                language=language,
+                static_error=static_error,
+                file_name=file_name,
+                source_code=buggy_code,
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": f"```{language}\n{fixed_code}\n```",
+        },
+    ]
 
 
 def iter_jsonl(path: Path) -> Iterable[tuple[int, Any]]:
@@ -184,6 +287,10 @@ def load_repair_examples(
             raise FileNotFoundError(f"Training file does not exist: {path}")
         for line_number, record in iter_jsonl(path):
             example = validate_record(record, path, line_number)
+            # The task prompt explicitly permits unresolved symbols. Training on
+            # name/type resolution mutations would contradict that instruction.
+            if example["failure_class"] != "syntax_error":
+                continue
             if example["id"] in seen_ids:
                 raise ValueError(f"Duplicate sample id: {example['id']}")
             seen_ids.add(example["id"])
