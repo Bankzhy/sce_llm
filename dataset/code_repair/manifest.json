@@ -1,0 +1,57 @@
+{
+  "generator": "generate_code_repair_dataset.py",
+  "dataset": "code-search-net/code_search_net",
+  "seed": 3407,
+  "profile": "deterministic",
+  "enabled_mutations": [
+    "keyword_misspelling",
+    "punctuation_deletion",
+    "type_identifier_space_deletion",
+    "type_name_misspelling"
+  ],
+  "parameters": {
+    "languages": [
+      "java",
+      "python"
+    ],
+    "splits": [
+      "train"
+    ],
+    "mutants_per_source": 1,
+    "target_records_per_output": 5000,
+    "max_source_samples": null,
+    "min_lines": 5,
+    "max_lines": 100,
+    "streaming": true,
+    "randomize": true,
+    "shuffle_buffer": 100000
+  },
+  "outputs": [
+    {
+      "language": "java",
+      "split": "train",
+      "output_file": "dataset/code_repair/java/train.jsonl",
+      "source_rows_seen": 5959,
+      "source_rows_skipped": 959,
+      "records_written": 5000,
+      "mutation_counts": {
+        "keyword_misspelling": 1052,
+        "punctuation_deletion": 1420,
+        "type_identifier_space_deletion": 1292,
+        "type_name_misspelling": 1236
+      }
+    },
+    {
+      "language": "python",
+      "split": "train",
+      "output_file": "dataset/code_repair/python/train.jsonl",
+      "source_rows_seen": 5261,
+      "source_rows_skipped": 261,
+      "records_written": 5000,
+      "mutation_counts": {
+        "keyword_misspelling": 2464,
+        "punctuation_deletion": 2536
+      }
+    }
+  ]
+}
