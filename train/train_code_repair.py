@@ -399,20 +399,27 @@ def main() -> None:
     examples = load_repair_examples(
         args.train_files, max_samples=args.max_samples, seed=args.seed
     )
-    dataset = Dataset.from_list(examples).map(
-        build_formatter(tokenizer),
-        batched=True,
-        desc="Formatting Qwen chat samples",
-    )
-    original_count = len(dataset)
-    if args.drop_overlength:
-        dataset = dataset.filter(
-            lambda row: token_length(tokenizer, row["text"]) <= args.max_seq_length,
-            desc="Dropping samples that would truncate the repair target",
+    formatted_examples = []
+    for example in examples:
+        formatted_example = dict(example)
+        formatted_example["text"] = format_messages(tokenizer, example["messages"])
+        formatted_example["token_length"] = token_length(
+            tokenizer, formatted_example["text"]
         )
-    dropped_count = original_count - len(dataset)
-    if not dataset:
+        formatted_examples.append(formatted_example)
+
+    original_count = len(formatted_examples)
+    if args.drop_overlength:
+        formatted_examples = [
+            example
+            for example in formatted_examples
+            if example["token_length"] <= args.max_seq_length
+        ]
+    dropped_count = original_count - len(formatted_examples)
+    if not formatted_examples:
         raise ValueError("No training samples remain after length filtering.")
+
+    dataset = Dataset.from_list(formatted_examples)
 
     eval_dataset = None
     if args.eval_ratio > 0 and len(dataset) > 1:
