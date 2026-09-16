@@ -362,9 +362,9 @@ def main() -> None:
 
     import torch
     from datasets import Dataset
+    from unsloth import FastLanguageModel
     from transformers import TrainingArguments
     from trl import SFTTrainer
-    from unsloth import FastLanguageModel
 
     try:
         from trl import SFTConfig
