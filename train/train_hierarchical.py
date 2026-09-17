@@ -11,6 +11,10 @@ csv.field_size_limit(200_000_000)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "codesearchnet_filtered_train.csv"
+DEFAULT_CODE_REPAIR_MODEL = (
+    ROOT_DIR
+    / "lora_model_code_repair_unsloth_qwen3_4b_instruct_2507_unsloth_bnb_4bit"
+)
 
 HIERARCHICAL_INSTRUCTION = """You are a program analysis expert.
 Perform hierarchical reasoning to generate program graphs.
@@ -63,7 +67,8 @@ ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an
 
 
 def model_suffix_from_name(model_name: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9]+", "_", model_name).strip("_").lower()
+    compact_name = Path(model_name).name or model_name
+    return re.sub(r"[^a-zA-Z0-9]+", "_", compact_name).strip("_").lower()
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,7 +76,14 @@ def parse_args() -> argparse.Namespace:
         description="Fine-tune a lightweight LLM with hierarchical AST -> CFG -> PDG graph generation."
     )
     parser.add_argument("--train-file", default=str(DEFAULT_TRAIN_FILE))
-    parser.add_argument("--model-name", default="unsloth/codellama-7b-bnb-4bit")
+    parser.add_argument(
+        "--model-name",
+        default=str(DEFAULT_CODE_REPAIR_MODEL),
+        help=(
+            "Saved Code Repair LoRA directory, merged model directory, or a base "
+            "Hugging Face model id. A loaded LoRA is continued instead of replaced."
+        ),
+    )
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--save-dir", default=None)
     parser.add_argument("--max-seq-length", type=int, default=4096)
@@ -102,9 +114,65 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preview-samples", type=int, default=2)
     args = parser.parse_args()
     model_suffix = model_suffix_from_name(args.model_name)
-    args.output_dir = args.output_dir or str(ROOT_DIR / "outputs" / f"hierarchical_{model_suffix}")
-    args.save_dir = args.save_dir or str(ROOT_DIR / f"lora_model_hierarchical_{model_suffix}")
+    args.output_dir = args.output_dir or str(
+        ROOT_DIR / "outputs" / f"hierarchical_from_{model_suffix}"
+    )
+    args.save_dir = args.save_dir or str(
+        ROOT_DIR / f"lora_model_hierarchical_from_{model_suffix}"
+    )
     return args
+
+
+def has_lora_adapter(model) -> bool:
+    peft_config = getattr(model, "peft_config", None)
+    return bool(peft_config)
+
+
+def make_existing_adapter_trainable(model) -> int:
+    """Enable an adapter loaded by FastLanguageModel and return trainable count."""
+    if hasattr(model, "enable_adapter_layers"):
+        model.enable_adapter_layers()
+    model.train()
+
+    for name, parameter in model.named_parameters():
+        if "lora_" in name or "modules_to_save" in name:
+            parameter.requires_grad_(True)
+
+    trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+    if trainable == 0:
+        raise RuntimeError(
+            "A LoRA adapter was detected, but it has no trainable parameters. "
+            "Check that --model-name points to the saved Code Repair adapter directory."
+        )
+    return trainable
+
+
+def prepare_lora_model(model, fast_language_model, args):
+    """Continue an existing adapter, or create one for a plain base model."""
+    if has_lora_adapter(model):
+        trainable = make_existing_adapter_trainable(model)
+        print(f"lora_initialization: continuing existing adapter ({trainable:,} trainable parameters)")
+        return model
+
+    print("lora_initialization: creating a new adapter on the base model")
+    return fast_language_model.get_peft_model(
+        model,
+        r=args.lora_r,
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+        lora_alpha=args.lora_alpha,
+        lora_dropout=0,
+        bias="none",
+        use_gradient_checkpointing=True,
+        random_state=args.seed,
+    )
 
 
 def find_column(fieldnames: list[str] | None, column: str) -> str:
@@ -278,24 +346,7 @@ def main() -> None:
     dataset = Dataset.from_list(examples)
     dataset = dataset.map(build_formatter(tokenizer), batched=True)
 
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=args.lora_r,
-        target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ],
-        lora_alpha=args.lora_alpha,
-        lora_dropout=0,
-        bias="none",
-        use_gradient_checkpointing=True,
-        random_state=args.seed,
-    )
+    model = prepare_lora_model(model, FastLanguageModel, args)
 
     training_kwargs = {
         "per_device_train_batch_size": args.per_device_train_batch_size,
