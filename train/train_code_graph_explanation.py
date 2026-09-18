@@ -449,11 +449,12 @@ def main() -> None:
         preview_dataset(args)
         return
 
+    from unsloth import FastLanguageModel
+
     import torch
     from datasets import Dataset
     from transformers import TrainingArguments
     from trl import SFTTrainer
-    from unsloth import FastLanguageModel
 
     try:
         from trl import SFTConfig
