@@ -1,0 +1,574 @@
+#!/usr/bin/env python3
+"""QLoRA fine-tuning for graph-grounded code explanation and static-analysis QA.
+
+The training flow follows ``train_hierarchical.py``.  Training messages are
+rebuilt from each record using the HCG Code explanation client contract so old
+JSONL files automatically use the current inference prompt without rewriting
+or regenerating the dataset.
+"""
+
+from __future__ import annotations
+
+import argparse
+import inspect
+import json
+import random
+import re
+from collections import Counter
+from pathlib import Path
+from typing import Any, Iterable
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_TRAIN_FILES = (
+    ROOT_DIR / "dataset" / "static_analysis_qa_10000" / "java" / "train.jsonl",
+    ROOT_DIR / "dataset" / "static_analysis_qa_10000" / "python" / "train.jsonl",
+)
+DEFAULT_HIERARCHICAL_MODEL = (
+    ROOT_DIR
+    / "lora_model_hierarchical_from_lora_model_code_repair_unsloth_qwen3_4b_instruct_2507_unsloth_bnb_4bit"
+)
+EXPECTED_ROLES = ("system", "user", "assistant")
+EXPLANATION_SYSTEM_PROMPT = (
+    "Answer the code static-analysis question using only the supplied code "
+    "and graph. Return JSON with keys answer and relevant_lines."
+)
+EXPLANATION_OUTPUT_INSTRUCTIONS = """Return exactly this JSON structure:
+{"answer":"Natural-language answer to the question.","relevant_lines":[3,7,12]}
+
+The answer must be based only on the supplied code and graph. relevant_lines must contain only directly needed 1-based source-code line numbers. It may be non-contiguous, must not contain node IDs, and must not include unrelated lines to form a range."""
+TASK_TYPES = {
+    "DATA_FLOW",
+    "VARIABLE_DEF",
+    "VARIABLE_USE",
+    "FORWARD_SLICE",
+    "BACKWARD_SLICE",
+    "DATA_DEPENDENCY",
+    "CONTROL_DEPENDENCY",
+    "CONTROL_FLOW",
+    "BRANCH_PATH",
+    "REACHABILITY",
+    "AST_SUBTREE",
+    "AST_RELATION",
+}
+
+
+def model_suffix_from_name(model_name: str) -> str:
+    compact_name = Path(model_name).name or model_name
+    return re.sub(r"[^a-zA-Z0-9]+", "_", compact_name).strip("_").lower()
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Fine-tune a lightweight LLM to answer graph-grounded code "
+            "static-analysis questions."
+        )
+    )
+    parser.add_argument(
+        "--train-files",
+        nargs="+",
+        default=[str(path) for path in DEFAULT_TRAIN_FILES],
+        help="Java and Python static-analysis QA JSONL files.",
+    )
+    parser.add_argument(
+        "--model-name",
+        default=str(DEFAULT_HIERARCHICAL_MODEL),
+        help=(
+            "Saved hierarchical-graph LoRA directory, merged model directory, "
+            "or base Hugging Face model id. Existing LoRA adapters are continued."
+        ),
+    )
+    parser.add_argument("--output-dir")
+    parser.add_argument("--save-dir")
+    parser.add_argument("--max-seq-length", type=int, default=32768)
+    parser.add_argument(
+        "--load-in-4bit", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument("--per-device-train-batch-size", type=int, default=1)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
+    parser.add_argument("--num-train-epochs", type=float, default=3.0)
+    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--warmup-ratio", type=float, default=0.03)
+    parser.add_argument("--logging-steps", type=int, default=10)
+    parser.add_argument("--save-steps", type=int, default=250)
+    parser.add_argument("--save-total-limit", type=int, default=2)
+    parser.add_argument("--lora-r", type=int, default=32)
+    parser.add_argument("--lora-alpha", type=int, default=64)
+    parser.add_argument("--lora-dropout", type=float, default=0.0)
+    parser.add_argument("--seed", type=int, default=3407)
+    parser.add_argument("--max-samples", type=int)
+    parser.add_argument(
+        "--packing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Packing is disabled by default because examples contain long graphs.",
+    )
+    parser.add_argument(
+        "--assistant-only-loss",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Mask system/user tokens and train only on assistant JSON answers.",
+    )
+    parser.add_argument(
+        "--drop-overlength",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Drop complete conversations exceeding --max-seq-length.",
+    )
+    parser.add_argument("--resume-from-checkpoint")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and preview JSONL records without loading a model.",
+    )
+    parser.add_argument("--preview-samples", type=int, default=2)
+    args = parser.parse_args(argv)
+
+    suffix = model_suffix_from_name(args.model_name)
+    args.output_dir = args.output_dir or str(
+        ROOT_DIR / "outputs" / f"code_graph_explanation_{suffix}"
+    )
+    args.save_dir = args.save_dir or str(
+        ROOT_DIR / f"lora_model_code_graph_explanation_{suffix}"
+    )
+
+    if args.max_seq_length < 1024:
+        parser.error("--max-seq-length must be at least 1024")
+    if args.max_samples is not None and args.max_samples < 1:
+        parser.error("--max-samples must be at least 1")
+    if args.per_device_train_batch_size < 1:
+        parser.error("--per-device-train-batch-size must be at least 1")
+    if args.gradient_accumulation_steps < 1:
+        parser.error("--gradient-accumulation-steps must be at least 1")
+    if args.num_train_epochs <= 0:
+        parser.error("--num-train-epochs must be positive")
+    if args.preview_samples < 0:
+        parser.error("--preview-samples cannot be negative")
+    return args
+
+
+def iter_jsonl(path: Path) -> Iterable[tuple[int, Any]]:
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                yield line_number, json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{path}:{line_number}: invalid JSON: {error}") from error
+
+
+def validate_message(message: Any, expected_role: str, sample_id: str) -> dict[str, str]:
+    if not isinstance(message, dict):
+        raise ValueError(f"Sample {sample_id}: every message must be an object.")
+    role = message.get("role")
+    content = message.get("content")
+    if role != expected_role:
+        raise ValueError(
+            f"Sample {sample_id}: expected role {expected_role!r}, got {role!r}."
+        )
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError(
+            f"Sample {sample_id}: {expected_role} content must be non-empty."
+        )
+    return {"role": role, "content": content}
+
+
+def validate_assistant_answer(
+    content: str,
+    *,
+    record: dict[str, Any],
+    sample_id: str,
+    code_line_count: int,
+) -> dict[str, Any]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"Sample {sample_id}: assistant content must be valid JSON: {error}"
+        ) from error
+    if not isinstance(payload, dict) or set(payload) != {"answer", "relevant_lines"}:
+        raise ValueError(
+            f"Sample {sample_id}: assistant JSON must contain only answer and relevant_lines."
+        )
+    answer = payload.get("answer")
+    relevant_lines = payload.get("relevant_lines")
+    if not isinstance(answer, str) or not answer.strip():
+        raise ValueError(f"Sample {sample_id}: assistant answer must be non-empty.")
+    if (
+        not isinstance(relevant_lines, list)
+        or not relevant_lines
+        or any(
+            type(line) is not int or line < 1 or line > code_line_count
+            for line in relevant_lines
+        )
+    ):
+        raise ValueError(f"Sample {sample_id}: invalid relevant_lines.")
+    if relevant_lines != sorted(set(relevant_lines)):
+        raise ValueError(
+            f"Sample {sample_id}: relevant_lines must be sorted and unique."
+        )
+    if answer.strip() != str(record.get("answer", "")).strip():
+        raise ValueError(
+            f"Sample {sample_id}: assistant answer differs from the top-level answer."
+        )
+    if relevant_lines != record.get("relevant_lines"):
+        raise ValueError(
+            f"Sample {sample_id}: assistant relevant_lines differ from the top-level field."
+        )
+    return payload
+
+
+def build_client_user_prompt(
+    *,
+    language: str,
+    code: str,
+    ast_graph: str,
+    dependency_enriched_cfg: str,
+    question: str,
+) -> str:
+    """Mirror HCG's LlmGraphExplanationService._prompt exactly."""
+    return f"""Language: {language}
+
+Code (line numbers start at 1):
+{code}
+
+Static-analysis graph:
+[AST]
+{ast_graph}
+
+[CFG]
+{dependency_enriched_cfg}
+
+Question:
+{question}
+
+{EXPLANATION_OUTPUT_INSTRUCTIONS}"""
+
+
+def validate_record(record: Any, path: Path, line_number: int) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        raise ValueError(f"{path}:{line_number}: record must be an object.")
+    sample_id = str(record.get("id", f"{path.name}:{line_number}"))
+    language = record.get("language")
+    if language not in {"java", "python"}:
+        raise ValueError(f"Sample {sample_id}: unsupported language {language!r}.")
+    task_type = record.get("task_type")
+    if task_type not in TASK_TYPES:
+        raise ValueError(f"Sample {sample_id}: unsupported task type {task_type!r}.")
+
+    code = record.get("code")
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError(f"Sample {sample_id}: code must be non-empty.")
+    graphs = record.get("graphs")
+    if not isinstance(graphs, dict):
+        raise ValueError(f"Sample {sample_id}: graphs must be an object.")
+    if not isinstance(graphs.get("ast"), str) or not graphs["ast"].strip():
+        raise ValueError(f"Sample {sample_id}: graphs.ast must be non-empty.")
+    if not isinstance(graphs.get("cfg"), str) or not graphs["cfg"].strip():
+        raise ValueError(f"Sample {sample_id}: graphs.cfg must be non-empty.")
+
+    messages = record.get("messages")
+    if not isinstance(messages, list) or len(messages) != len(EXPECTED_ROLES):
+        raise ValueError(
+            f"Sample {sample_id}: messages must contain system, user, and assistant."
+        )
+    stored_messages = [
+        validate_message(message, role, sample_id)
+        for message, role in zip(messages, EXPECTED_ROLES)
+    ]
+    validate_assistant_answer(
+        stored_messages[-1]["content"],
+        record=record,
+        sample_id=sample_id,
+        code_line_count=len(code.splitlines()),
+    )
+    question = record.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(f"Sample {sample_id}: question must be non-empty.")
+
+    # Do not train on the historical prompt embedded in existing records.  The
+    # client contract is canonical and is reconstructed from lossless fields.
+    training_messages = [
+        {"role": "system", "content": EXPLANATION_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": build_client_user_prompt(
+                language=language,
+                code=code,
+                ast_graph=graphs["ast"],
+                dependency_enriched_cfg=graphs["cfg"],
+                question=question,
+            ),
+        },
+        stored_messages[-1],
+    ]
+
+    return {
+        "id": sample_id,
+        "language": language,
+        "task_type": task_type,
+        "code": code,
+        "question": question,
+        "messages": training_messages,
+    }
+
+
+def normalized_code(code: str) -> str:
+    return code.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def load_explanation_examples(
+    train_files: list[str],
+    *,
+    max_samples: int | None = None,
+    seed: int = 3407,
+) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_codes: set[str] = set()
+    for filename in train_files:
+        path = Path(filename)
+        if not path.is_file():
+            raise FileNotFoundError(f"Training file does not exist: {path}")
+        for line_number, record in iter_jsonl(path):
+            example = validate_record(record, path, line_number)
+            if example["id"] in seen_ids:
+                raise ValueError(f"Duplicate sample id: {example['id']}")
+            code_key = normalized_code(example["code"])
+            if code_key in seen_codes:
+                raise ValueError(f"Duplicate source code: {example['id']}")
+            seen_ids.add(example["id"])
+            seen_codes.add(code_key)
+            examples.append(example)
+
+    if not examples:
+        raise ValueError("No valid code-graph explanation examples were loaded.")
+    random.Random(seed).shuffle(examples)
+    if max_samples is not None:
+        examples = examples[:max_samples]
+    return examples
+
+
+def format_messages(tokenizer: Any, messages: list[dict[str, str]]) -> str:
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+
+
+def token_length(tokenizer: Any, text: str) -> int:
+    return len(tokenizer(text, add_special_tokens=False, truncation=False)["input_ids"])
+
+
+def has_lora_adapter(model: Any) -> bool:
+    return bool(getattr(model, "peft_config", None))
+
+
+def make_existing_adapter_trainable(model: Any) -> int:
+    if hasattr(model, "enable_adapter_layers"):
+        model.enable_adapter_layers()
+    model.train()
+    for name, parameter in model.named_parameters():
+        if "lora_" in name or "modules_to_save" in name:
+            parameter.requires_grad_(True)
+    trainable = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    )
+    if trainable == 0:
+        raise RuntimeError(
+            "A LoRA adapter was detected but has no trainable parameters."
+        )
+    return trainable
+
+
+def prepare_lora_model(model: Any, fast_language_model: Any, args: argparse.Namespace):
+    if has_lora_adapter(model):
+        trainable = make_existing_adapter_trainable(model)
+        print(
+            "lora_initialization: continuing existing adapter "
+            f"({trainable:,} trainable parameters)"
+        )
+        return model
+    print("lora_initialization: creating a new adapter on the base model")
+    return fast_language_model.get_peft_model(
+        model,
+        r=args.lora_r,
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        bias="none",
+        use_gradient_checkpointing=True,
+        random_state=args.seed,
+    )
+
+
+def compatible_config(config_class: Any, values: dict[str, Any]) -> Any:
+    parameters = inspect.signature(config_class.__init__).parameters
+    return config_class(**{key: value for key, value in values.items() if key in parameters})
+
+
+def preview_dataset(args: argparse.Namespace) -> None:
+    examples = load_explanation_examples(
+        args.train_files,
+        max_samples=args.max_samples,
+        seed=args.seed,
+    )
+    language_counts = Counter(example["language"] for example in examples)
+    task_counts = Counter(example["task_type"] for example in examples)
+    print(f"train_files: {args.train_files}")
+    print(f"model_name: {args.model_name}")
+    print(f"output_dir: {args.output_dir}")
+    print(f"save_dir: {args.save_dir}")
+    print(f"max_seq_length: {args.max_seq_length}")
+    print(f"num_examples: {len(examples)}")
+    print(f"language_counts: {dict(sorted(language_counts.items()))}")
+    print(f"task_counts: {dict(sorted(task_counts.items()))}")
+    for index, example in enumerate(examples[: args.preview_samples]):
+        print(f"\n===== sample {index} ({example['id']}) =====")
+        print(f"language: {example['language']}")
+        print(f"task_type: {example['task_type']}")
+        print(json.dumps(example["messages"], ensure_ascii=False, indent=2)[:6000])
+
+
+def main() -> None:
+    args = parse_args()
+    if args.dry_run:
+        preview_dataset(args)
+        return
+
+    import torch
+    from datasets import Dataset
+    from transformers import TrainingArguments
+    from trl import SFTTrainer
+    from unsloth import FastLanguageModel
+
+    try:
+        from trl import SFTConfig
+    except ImportError:
+        SFTConfig = None
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=args.model_name,
+        max_seq_length=args.max_seq_length,
+        dtype=None,
+        load_in_4bit=args.load_in_4bit,
+    )
+    model = prepare_lora_model(model, FastLanguageModel, args)
+
+    examples = load_explanation_examples(
+        args.train_files,
+        max_samples=args.max_samples,
+        seed=args.seed,
+    )
+    formatted_examples: list[dict[str, Any]] = []
+    for example in examples:
+        formatted = dict(example)
+        formatted["text"] = format_messages(tokenizer, example["messages"])
+        formatted["token_length"] = token_length(tokenizer, formatted["text"])
+        formatted_examples.append(formatted)
+
+    original_count = len(formatted_examples)
+    if args.drop_overlength:
+        formatted_examples = [
+            example
+            for example in formatted_examples
+            if example["token_length"] <= args.max_seq_length
+        ]
+    dropped_count = original_count - len(formatted_examples)
+    if not formatted_examples:
+        raise ValueError("No samples remain after sequence-length filtering.")
+    dataset = Dataset.from_list(formatted_examples)
+
+    lengths = [example["token_length"] for example in formatted_examples]
+    print(f"loaded_examples: {original_count}")
+    print(f"overlength_examples_dropped: {dropped_count}")
+    print(f"train_examples: {len(dataset)}")
+    print(f"maximum_retained_tokens: {max(lengths)}")
+
+    training_values = {
+        "per_device_train_batch_size": args.per_device_train_batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "num_train_epochs": args.num_train_epochs,
+        "warmup_ratio": args.warmup_ratio,
+        "learning_rate": args.learning_rate,
+        "fp16": not torch.cuda.is_bf16_supported(),
+        "bf16": torch.cuda.is_bf16_supported(),
+        "logging_steps": args.logging_steps,
+        "save_steps": args.save_steps,
+        "save_strategy": "steps",
+        "save_total_limit": args.save_total_limit,
+        "optim": "adamw_8bit",
+        "weight_decay": 0.01,
+        "lr_scheduler_type": "cosine",
+        "output_dir": args.output_dir,
+        "seed": args.seed,
+        "report_to": "none",
+        "eval_strategy": "no",
+        "evaluation_strategy": "no",
+    }
+
+    if SFTConfig is None:
+        trainer_args = compatible_config(TrainingArguments, training_values)
+    else:
+        parameters = inspect.signature(SFTConfig.__init__).parameters
+        sft_values = dict(training_values)
+        sft_values["dataset_text_field"] = "text"
+        if "max_length" in parameters:
+            sft_values["max_length"] = args.max_seq_length
+        else:
+            sft_values["max_seq_length"] = args.max_seq_length
+        sft_values["packing"] = args.packing
+        trainer_args = compatible_config(SFTConfig, sft_values)
+
+    trainer_values: dict[str, Any] = {
+        "model": model,
+        "train_dataset": dataset,
+        "args": trainer_args,
+    }
+    trainer_parameters = inspect.signature(SFTTrainer.__init__).parameters
+    if "processing_class" in trainer_parameters:
+        trainer_values["processing_class"] = tokenizer
+    elif "tokenizer" in trainer_parameters:
+        trainer_values["tokenizer"] = tokenizer
+    if "dataset_text_field" in trainer_parameters:
+        trainer_values["dataset_text_field"] = "text"
+    if "max_seq_length" in trainer_parameters:
+        trainer_values["max_seq_length"] = args.max_seq_length
+    if "packing" in trainer_parameters:
+        trainer_values["packing"] = args.packing
+
+    trainer = SFTTrainer(**trainer_values)
+    if args.assistant_only_loss:
+        try:
+            from unsloth.chat_templates import train_on_responses_only
+        except ImportError as error:
+            raise RuntimeError(
+                "This Unsloth version does not provide train_on_responses_only; "
+                "upgrade Unsloth or use --no-assistant-only-loss."
+            ) from error
+        trainer = train_on_responses_only(
+            trainer,
+            instruction_part="<|im_start|>user\n",
+            response_part="<|im_start|>assistant\n",
+        )
+
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    model.save_pretrained(args.save_dir)
+    tokenizer.save_pretrained(args.save_dir)
+
+
+if __name__ == "__main__":
+    main()
