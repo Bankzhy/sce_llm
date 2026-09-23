@@ -24,23 +24,29 @@ DEFAULT_TRAIN_FILES = (
 DEFAULT_MODEL = "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit"
 EXPECTED_ROLES = ("system", "user", "assistant")
 
-SYSTEM_PROMPT = """You only repair {language} syntax and incomplete control structures. Unresolved symbols are allowed. Never invent methods, classes, imports, or business logic. Return only the repaired source."""
+SYSTEM_PROMPT = """You are a source-code syntax repair engine. Repair incomplete code so a parser can read it.
+Make only the smallest syntax or control-structure changes required by the parser error.
+Preserve the original behavior, identifiers, statements, ordering, and formatting whenever possible.
+Unresolved variables, calls, and types are allowed.
+Never add imports, comments, helper functions, classes, sample usage, or new business logic.
+Never delete valid statements merely to make parsing easier.
+Return the complete repaired source, not a patch or excerpt, in exactly one fenced code block.
+Return no explanation, reasoning, tool call, or text outside that code block."""
 
-USER_PROMPT = """Repair the incomplete or invalid {language} source below so it can be parsed.
-
-Make the smallest possible changes. Preserve existing lines, indentation, names, conditions, and statements whenever possible. Add only what is needed to complete the syntax and control structures.
-
-Unresolved method calls, variables, and types are valid for this task. Never add definitions for referenced symbols. Do not add imports, comments, helper methods, classes, or new business statements.
-
-Prefer appending missing braces or tokens without moving existing lines. Do not redesign or explain the code.
-
-Parser error: {static_error}
+USER_PROMPT = """Task: Repair the following {language} source for parsing.
 File: {file_name}
+Parser error: {static_error}
 
-Return the entire repaired file inside one `{language}` code block and nothing else.
-```{language}
+<source>
 {source_code}
-```"""
+</source>
+
+Requirements:
+- Fix only syntax or incomplete control structure.
+- Preserve all valid original statements and identifiers.
+- The result must be the complete file.
+
+Return exactly one `{language}` fenced code block."""
 
 
 def model_suffix_from_name(model_name: str) -> str:
@@ -226,8 +232,8 @@ def build_static_error(record: dict[str, Any], mutation: dict[str, Any]) -> str:
     line = mutation.get("line")
     column = mutation.get("column")
     if isinstance(line, int) and isinstance(column, int):
-        return f"Tree-sitter parse error near line {line}, column {column}."
-    return "Tree-sitter reported an invalid or incomplete syntax structure."
+        return f"Parser error near line {line}, column {column}."
+    return "Parser reported an invalid or incomplete syntax structure."
 
 
 def build_training_messages(
@@ -241,7 +247,7 @@ def build_training_messages(
     return [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT.format(language=language),
+            "content": SYSTEM_PROMPT,
         },
         {
             "role": "user",

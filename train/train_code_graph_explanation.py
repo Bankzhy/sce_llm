@@ -30,13 +30,17 @@ DEFAULT_HIERARCHICAL_MODEL = (
 )
 EXPECTED_ROLES = ("system", "user", "assistant")
 EXPLANATION_SYSTEM_PROMPT = (
-    "Answer the code static-analysis question using only the supplied code "
-    "and graph. Return JSON with keys answer and relevant_lines."
+    "You are a code static-analysis assistant. Answer using only the supplied "
+    "source code and graphs.\n"
+    "Return one JSON object only. Do not use markdown, tool calls, reasoning "
+    "tags, or text outside the JSON.\n"
+    'The JSON schema is: {"answer":"string","relevant_lines":[]}.\n'
+    'Populate "relevant_lines" with the source line numbers required by the question.\n'
+    'Use the same natural language as the question for "answer".\n'
+    'Explain the code behavior in "answer"; do not answer with only line numbers.\n'
+    '"relevant_lines" must contain only directly supporting 1-based source line '
+    "numbers, never graph node IDs."
 )
-EXPLANATION_OUTPUT_INSTRUCTIONS = """Return exactly this JSON structure:
-{"answer":"Natural-language answer to the question.","relevant_lines":[3,7,12]}
-
-The answer must be based only on the supplied code and graph. relevant_lines must contain only directly needed 1-based source-code line numbers. It may be non-contiguous, must not contain node IDs, and must not include unrelated lines to form a range."""
 TASK_TYPES = {
     "DATA_FLOW",
     "VARIABLE_DEF",
@@ -229,22 +233,174 @@ def build_client_user_prompt(
     question: str,
 ) -> str:
     """Mirror HCG's LlmGraphExplanationService._prompt exactly."""
-    return f"""Language: {language}
-
-Code (line numbers start at 1):
-{code}
-
-Static-analysis graph:
-[AST]
-{ast_graph}
-
-[CFG]
-{dependency_enriched_cfg}
+    return f"""Task: Answer the static-analysis question.
+Language: {language}
 
 Question:
+<question>
 {question}
+</question>
 
-{EXPLANATION_OUTPUT_INSTRUCTIONS}"""
+Numbered source code:
+<source>
+{number_source(code)}
+</source>
+
+AST in DOT format:
+{compact_dot_graph(ast_graph, name="AST", code=code, max_nodes=64)}
+
+Dependency-enriched CFG in DOT format:
+{compact_dot_graph(dependency_enriched_cfg, name="CFG", code=code, max_nodes=96)}
+
+Return exactly:
+{{"answer":"your answer","relevant_lines":[]}}
+
+Rules:
+- Base the answer only on the supplied source and graphs.
+- Use the source line numbers printed before "|".
+- relevant_lines may be non-contiguous.
+- For a control-flow question, include the controlling condition and the directly affected branch, call, or return statements.
+- When the question compares branches or outcomes, describe every relevant outcome in the answer.
+- For a data-flow question, include the required definition and use statements.
+- For a "where/called/used/referenced" question, include only the exact source lines containing the requested occurrence; do not include surrounding control flow.
+- Do not put AST or CFG node IDs in relevant_lines.
+- Do not add unrelated lines merely to make a continuous range."""
+
+
+def number_source(code: str) -> str:
+    lines = code.split("\n")
+    width = len(str(len(lines)))
+    return "\n".join(
+        f"{str(index).rjust(width)} | {line}"
+        for index, line in enumerate(lines, start=1)
+    )
+
+
+def _dot_escape(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "")
+    )
+
+
+def _attribute(attributes: str, name: str) -> str | None:
+    match = re.search(rf'\b{re.escape(name)}\s*=\s*"([^"]*)"', attributes)
+    return match.group(1) if match else None
+
+
+def compact_dot_graph(graph: str, *, name: str, code: str, max_nodes: int) -> str:
+    """Mirror the compact graph representation sent by the HCG client."""
+    node_pattern = re.compile(
+        r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*\[([^;\n]+)\]?\s*;?\s*$',
+        re.MULTILINE,
+    )
+    edge_pattern = re.compile(
+        r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*->\s*'
+        r'("[^"\n]+"|[^\s\[\];]+)(?:\s*\[([^;\n]+)\]?)?\s*;?\s*$',
+        re.MULTILINE,
+    )
+    source_lines = code.split("\n")
+    nodes: list[dict[str, Any]] = []
+    for match in node_pattern.finditer(graph):
+        node_id = match.group(1).strip('"')
+        attributes = match.group(2)
+        node_type = _attribute(attributes, "type") or "process_statement"
+        offset = re.search(r'(?:lines:)?(\d+)\s*[-:]\s*(\d+)', attributes)
+        line = int(offset.group(1)) if offset else 1
+        line = min(max(line, 1), max(len(source_lines), 1))
+        label = _attribute(attributes, "label")
+        if label is None and source_lines:
+            label = source_lines[line - 1].strip()
+        label = label or node_type
+        if label.lstrip().startswith(("#", "//", "/*", "*", '"""', "'''")):
+            continue
+        nodes.append({"id": node_id, "type": node_type, "line": line, "label": label})
+
+    leaf_types = {
+        "identifier",
+        "type-node",
+        "type",
+        "value",
+        "type_identifier",
+        "var_identifier",
+        "method_identifier",
+        "literal_value",
+    }
+    structural = [node for node in nodes if node["type"] not in leaf_types]
+    leaves = [node for node in nodes if node["type"] in leaf_types]
+    selected = (structural + leaves)[:max_nodes]
+    prefix = "a" if name.upper().startswith("AST") else "c"
+    short_ids = {node["id"]: f"{prefix}{index}" for index, node in enumerate(selected)}
+    output = [f"digraph {name}{{"]
+    for node in selected:
+        label = node["label"]
+        if len(label) > 80:
+            label = label[:77] + "..."
+        output.append(
+            f'{short_ids[node["id"]]}[t="{_dot_escape(node["type"])}",'
+            f'l={node["line"]},x="{_dot_escape(label)}"];'
+        )
+    for match in edge_pattern.finditer(graph):
+        source = match.group(1).strip('"')
+        target = match.group(2).strip('"')
+        if source not in short_ids or target not in short_ids:
+            continue
+        if name.upper().startswith("AST"):
+            output.append(f"{short_ids[source]}->{short_ids[target]};")
+        else:
+            edge_type = _attribute(match.group(3) or "", "type") or "control_flow"
+            if edge_type == "data" or edge_type.startswith("data_dependency"):
+                edge_type = "data_dependency"
+            elif edge_type.startswith("control-") or edge_type.startswith(
+                "control_dependency"
+            ):
+                edge_type = "control_dependency"
+            else:
+                edge_type = "control_flow"
+            output.append(
+                f'{short_ids[source]}->{short_ids[target]}[t="{edge_type}"];'
+            )
+    omitted = len(nodes) - len(selected)
+    if omitted > 0:
+        output.append(f"// {omitted} low-priority nodes omitted")
+    output.append("}")
+    return "\n".join(output)
+
+
+def location_evidence(question: str, code: str) -> list[int] | None:
+    """Mirror the client's deterministic correction for location questions."""
+    if not re.search(
+        r"where|location|called|invoked|referenced|used|哪里|在哪|何处|调用|使用|引用|出现",
+        question,
+        re.IGNORECASE,
+    ):
+        return None
+    chinese = re.search(
+        r"(?:变量|函数|方法)?\s*`?([A-Za-z_]\w*)`?\s*(?:在哪里|在哪|何处)",
+        question,
+    )
+    english = re.search(
+        r"(?:where\s+(?:is|are)\s+|locations?\s+of\s+)([A-Za-z_]\w*)",
+        question,
+        re.IGNORECASE,
+    )
+    symbol = (chinese or english).group(1) if chinese or english else None
+    if not symbol:
+        return None
+    source_lines = code.split("\n")
+    if re.search(r"called|invoked|调用", question, re.IGNORECASE):
+        call = re.compile(rf"\b{re.escape(symbol)}\s*\(")
+        calls = [
+            index
+            for index, line in enumerate(source_lines, 1)
+            if call.search(line) and not re.search(r"^\s*(?:def|class)\s+", line)
+        ]
+        if calls:
+            return calls
+    identifier = re.compile(rf"\b{re.escape(symbol)}\b")
+    return [index for index, line in enumerate(source_lines, 1) if identifier.search(line)]
 
 
 def validate_record(record: Any, path: Path, line_number: int) -> dict[str, Any]:
@@ -278,7 +434,7 @@ def validate_record(record: Any, path: Path, line_number: int) -> dict[str, Any]
         validate_message(message, role, sample_id)
         for message, role in zip(messages, EXPECTED_ROLES)
     ]
-    validate_assistant_answer(
+    assistant_payload = validate_assistant_answer(
         stored_messages[-1]["content"],
         record=record,
         sample_id=sample_id,
@@ -287,6 +443,17 @@ def validate_record(record: Any, path: Path, line_number: int) -> dict[str, Any]
     question = record.get("question")
     if not isinstance(question, str) or not question.strip():
         raise ValueError(f"Sample {sample_id}: question must be non-empty.")
+    exact_location_lines = location_evidence(question, code)
+    if exact_location_lines:
+        assistant_payload["relevant_lines"] = exact_location_lines
+    assistant_message = {
+        "role": "assistant",
+        "content": json.dumps(
+            assistant_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    }
 
     # Do not train on the historical prompt embedded in existing records.  The
     # client contract is canonical and is reconstructed from lossless fields.
@@ -302,7 +469,7 @@ def validate_record(record: Any, path: Path, line_number: int) -> dict[str, Any]
                 question=question,
             ),
         },
-        stored_messages[-1],
+        assistant_message,
     ]
 
     return {
