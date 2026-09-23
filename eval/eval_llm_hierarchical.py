@@ -28,11 +28,17 @@ from graph_eval_common import (
     to_bool,
     update_summary,
 )
-from train.train_hierarchical import ALPACA_PROMPT, HIERARCHICAL_INSTRUCTION, model_suffix_from_name
+from train.train_hierarchical import (
+    build_graph_user_prompt,
+    decode_escaped_newlines,
+    model_suffix_from_name,
+    normalize_graph,
+    strip_source_comments,
+)
 
 
-DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "codesearchnet_filtered_test.csv"
-DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_hierarchical_unsloth_codellama_7b_bnb_4bit"
+DEFAULT_TEST_FILE = ROOT_DIR / "dataset" / "codesearchnet_graph_test_clean.csv"
+DEFAULT_MODEL_DIR = ROOT_DIR / "lora_model_graph_generation_lora_model_code_repair_unsloth_qwen3_4b_instruct_2507_unsloth_bnb_4bit"
 GRAPH_TYPES = ["AST", "CFG", "PDG"]
 
 
@@ -95,8 +101,9 @@ def default_metrics_file(output_file: str) -> str:
     return str(path.with_name(f"{path.stem}_metrics.csv"))
 
 
-def build_prompt(code: str) -> str:
-    return ALPACA_PROMPT.format(HIERARCHICAL_INSTRUCTION, code, "")
+def build_prompt(code: str, graph_type: str, language: str) -> str:
+    analysis_source = strip_source_comments(code, language)
+    return build_graph_user_prompt(graph_type, language, analysis_source)
 
 
 def load_examples(
@@ -121,16 +128,29 @@ def load_examples(
     return examples
 
 
-def generate_graphs(model, tokenizer, code: str, max_new_tokens: int) -> str:
-    inputs = tokenizer(build_prompt(code), return_tensors="pt").to("cuda")
+def generate_graph(
+    model,
+    tokenizer,
+    code: str,
+    graph_type: str,
+    language: str,
+    max_new_tokens: int,
+) -> str:
+    prompt = build_prompt(code, graph_type, language)
+    input_ids = tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+    ).to(model.device)
     outputs = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
+        input_ids=input_ids,
+        max_new_tokens=min(max_new_tokens, 512 if graph_type == "AST" else 384),
         do_sample=False,
         use_cache=True,
         pad_token_id=tokenizer.eos_token_id,
     )
-    generated_tokens = outputs[0][inputs.input_ids.shape[1] :]
+    generated_tokens = outputs[0][input_ids.shape[1] :]
     return clean_prediction(tokenizer.decode(generated_tokens, skip_special_tokens=True))
 
 
@@ -182,27 +202,44 @@ def evaluate() -> None:
             flush=True,
         )
 
-        prediction = generate_graphs(model, tokenizer, example["code"], args.max_new_tokens)
+        code = decode_escaped_newlines(example["code"])
         pred_graphs = {
             graph_type: normalize_graph_for_metrics(
-                extract_graph(prediction, graph_type),
+                extract_graph(
+                    generate_graph(
+                        model,
+                        tokenizer,
+                        code,
+                        graph_type,
+                        example["language"].lower(),
+                        args.max_new_tokens,
+                    ),
+                    graph_type,
+                ),
                 graph_type,
             )
             for graph_type in GRAPH_TYPES
         }
         gt_graphs = {
-            graph_type: normalize_graph_for_metrics(example[graph_type], graph_type)
+            graph_type: normalize_graph_for_metrics(
+                normalize_graph(
+                    decode_escaped_newlines(example[graph_type]),
+                    graph_type,
+                    strip_source_comments(code, example["language"].lower()),
+                ),
+                graph_type,
+            )
             for graph_type in GRAPH_TYPES
         }
 
         row = {
-            "code": example["code"],
+            "code": code,
             "language": example["language"],
             "is_error": example["is_error"],
             "AST": gt_graphs["AST"],
             "CFG": gt_graphs["CFG"],
             "PDG": gt_graphs["PDG"],
-            "predict": prediction,
+            "predict": "\n\n".join(pred_graphs[graph_type] for graph_type in GRAPH_TYPES),
             "predict_AST": pred_graphs["AST"],
             "predict_CFG": pred_graphs["CFG"],
             "predict_PDG": pred_graphs["PDG"],

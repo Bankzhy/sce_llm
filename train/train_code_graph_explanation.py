@@ -26,7 +26,7 @@ DEFAULT_TRAIN_FILES = (
 )
 DEFAULT_HIERARCHICAL_MODEL = (
     ROOT_DIR
-    / "lora_model_hierarchical_from_lora_model_code_repair_unsloth_qwen3_4b_instruct_2507_unsloth_bnb_4bit"
+    / "lora_model_graph_generation_lora_model_code_repair_unsloth_qwen3_4b_instruct_2507_unsloth_bnb_4bit"
 )
 EXPECTED_ROLES = ("system", "user", "assistant")
 EXPLANATION_SYSTEM_PROMPT = (
@@ -293,12 +293,12 @@ def _attribute(attributes: str, name: str) -> str | None:
 def compact_dot_graph(graph: str, *, name: str, code: str, max_nodes: int) -> str:
     """Mirror the compact graph representation sent by the HCG client."""
     node_pattern = re.compile(
-        r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*\[([^;\n]+)\]?\s*;?\s*$',
+        r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*\[(.+)\]\s*;\s*$',
         re.MULTILINE,
     )
     edge_pattern = re.compile(
         r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*->\s*'
-        r'("[^"\n]+"|[^\s\[\];]+)(?:\s*\[([^;\n]+)\]?)?\s*;?\s*$',
+        r'("[^"\n]+"|[^\s\[\];]+)(?:\s*\[(.+)\])?\s*;\s*$',
         re.MULTILINE,
     )
     source_lines = code.split("\n")

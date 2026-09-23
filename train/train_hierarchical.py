@@ -19,7 +19,7 @@ from typing import Any
 
 csv.field_size_limit(200_000_000)
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "codesearchnet_filtered_train.csv"
+DEFAULT_TRAIN_FILE = ROOT_DIR / "dataset" / "codesearchnet_graph_train_clean.csv"
 DEFAULT_CODE_REPAIR_MODEL = ROOT_DIR / "lora_model_code_repair_unsloth_qwen3_4b_instruct_2507_unsloth_bnb_4bit"
 GRAPH_TYPES = ("AST", "CFG", "PDG")
 GRAPH_INSTRUCTIONS = {
@@ -143,6 +143,131 @@ def numbered_source(source: str) -> str:
     return "\n".join(f"{i}: {line}" for i, line in enumerate(source.split("\n"), 1))
 
 
+def strip_source_comments(source: str, language: str) -> str:
+    """Remove comments while preserving every character position and newline."""
+    if language.lower() == "python":
+        return _strip_python_comments(source)
+    result: list[str] = []
+    quote: str | None = None
+    escaped = line_comment = block_comment = False
+    index = 0
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if line_comment:
+            if current == "\n":
+                line_comment = False
+                result.append("\n")
+            else:
+                result.append(" ")
+        elif block_comment:
+            if current == "*" and following == "/":
+                result.extend((" ", " "))
+                index += 1
+                block_comment = False
+            else:
+                result.append("\n" if current == "\n" else " ")
+        elif quote is not None:
+            result.append(current)
+            if escaped:
+                escaped = False
+            elif current == "\\":
+                escaped = True
+            elif current == quote:
+                quote = None
+        elif current in {'"', "'", "`"}:
+            quote = current
+            result.append(current)
+        elif current == "/" and following in {"/", "*"}:
+            result.extend((" ", " "))
+            index += 1
+            line_comment = following == "/"
+            block_comment = following == "*"
+        else:
+            result.append(current)
+        index += 1
+    return "".join(result)
+
+
+def _strip_python_comments(source: str) -> str:
+    result: list[str] = []
+    quote: str | None = None
+    doc_quote: str | None = None
+    triple = escaped = comment = line_has_code = False
+    index = 0
+    while index < len(source):
+        current = source[index]
+        if doc_quote is not None:
+            delimiter = doc_quote * 3
+            if source.startswith(delimiter, index):
+                result.extend("   ")
+                index += 2
+                doc_quote = None
+            else:
+                result.append("\n" if current == "\n" else " ")
+                if current == "\n":
+                    line_has_code = False
+        elif comment:
+            if current == "\n":
+                comment = False
+                line_has_code = False
+                result.append("\n")
+            else:
+                result.append(" ")
+        elif quote is not None:
+            delimiter = quote * 3
+            if triple and source.startswith(delimiter, index):
+                result.extend(delimiter)
+                index += 2
+                quote = None
+                triple = escaped = False
+            else:
+                result.append(current)
+                if current == "\n":
+                    line_has_code = False
+                if not triple:
+                    if escaped:
+                        escaped = False
+                    elif current == "\\":
+                        escaped = True
+                    elif current == quote:
+                        quote = None
+        elif current == "#":
+            result.append(" ")
+            comment = True
+        else:
+            prefix_length = 0
+            if not line_has_code and current in "rRuUbBfF":
+                prefix_length = 2 if index + 1 < len(source) and source[index + 1] in "rRuUbBfF" else 1
+            quote_index = index + prefix_length
+            candidate = source[quote_index:quote_index + 3]
+            if prefix_length and candidate in {'"""', "'''"}:
+                result.extend(" " * (prefix_length + 3))
+                doc_quote = candidate[0]
+                index = quote_index + 2
+            elif current in {'"', "'"}:
+                delimiter = current * 3
+                triple = source.startswith(delimiter, index)
+                if triple and not line_has_code:
+                    result.extend("   ")
+                    doc_quote = current
+                    index += 2
+                else:
+                    quote = current
+                    result.extend(delimiter if triple else current)
+                    if triple:
+                        index += 2
+                    line_has_code = True
+            else:
+                result.append(current)
+                if current == "\n":
+                    line_has_code = False
+                elif current.strip():
+                    line_has_code = True
+        index += 1
+    return "".join(result)
+
+
 def build_graph_user_prompt(graph_type: str, language: str, source: str) -> str:
     graph_type = graph_type.upper()
     nodes, edges = graph_budget(graph_type, source)
@@ -176,8 +301,8 @@ def normalize_graph(graph: str, graph_type: str, source: str) -> str:
     source_lines = source.split("\n")
     line_count = max(len(source_lines), 1)
     max_nodes, max_edges = graph_budget(graph_type, source)
-    node_re = re.compile(r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*\[([^;\n]+)\]?\s*;?\s*$', re.MULTILINE)
-    edge_re = re.compile(r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*->\s*("[^"\n]+"|[^\s\[\];]+)(?:\s*\[([^;\n]+)\]?)?\s*;?\s*$', re.MULTILINE)
+    node_re = re.compile(r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*\[(.+)\]\s*;\s*$', re.MULTILINE)
+    edge_re = re.compile(r'^\s*("[^"\n]+"|[^\s\[\]-]+)\s*->\s*("[^"\n]+"|[^\s\[\];]+)(?:\s*\[(.+)\])?\s*;\s*$', re.MULTILINE)
     nodes: list[dict[str, Any]] = []
     for match in node_re.finditer(graph):
         node_id, attrs = match.group(1).strip('"'), match.group(2)
@@ -194,8 +319,11 @@ def normalize_graph(graph: str, graph_type: str, source: str) -> str:
         (match.group(1).strip('"'), match.group(2).strip('"'), _attribute(match.group(3) or "", "type"))
         for match in edge_re.finditer(graph)
     ]
+    ast_root_id: str | None = None
+    ast_method_id: str | None = None
     if graph_type == "AST":
         by_id = {node["id"]: node for node in nodes}
+        existing_root = next((node for node in nodes if node["type"] == "root"), None)
         structural = [n for n in nodes if n["type"] not in AST_LEAVES and n["type"] != "root"]
         # The client contract permits semantic leaves only below process nodes,
         # with at most one type, one identifier, and one literal per process.
@@ -210,11 +338,23 @@ def normalize_graph(graph: str, graph_type: str, source: str) -> str:
             if slot not in leaf_slots:
                 leaves.append(child)
                 leaf_slots.add(slot)
-        synthetic = [
-            {"id": "hcg_root", "type": "root", "start": 1, "end": line_count, "label": None},
-            {"id": "hcg_method", "type": "method_declaration", "start": 1, "end": line_count, "label": None},
-        ]
-        nodes = (synthetic + structural + leaves)[:max_nodes]
+        root = existing_root or {
+            "id": "hcg_root", "type": "root", "start": 1,
+            "end": line_count, "label": None,
+        }
+        existing_method = next(
+            (node for node in structural if node["type"] == "method_declaration"),
+            None,
+        )
+        method = existing_method or {
+            "id": "hcg_method", "type": "method_declaration", "start": 1,
+            "end": line_count, "label": None,
+        }
+        ast_root_id, ast_method_id = root["id"], method["id"]
+        prefix = [root]
+        if existing_method is None:
+            prefix.append(method)
+        nodes = (prefix + structural + leaves)[:max_nodes]
     else:
         nodes = nodes[:max_nodes]
     if not nodes:
@@ -232,8 +372,9 @@ def normalize_graph(graph: str, graph_type: str, source: str) -> str:
             edges.append((source_id, target_id, edge_type))
     if graph_type == "AST":
         parented: set[str] = set()
-        tree: list[tuple[str, str, str | None]] = [("hcg_root", "hcg_method", None)]
-        parented.add("hcg_method")
+        assert ast_root_id is not None and ast_method_id is not None
+        tree: list[tuple[str, str, str | None]] = [(ast_root_id, ast_method_id, None)]
+        parented.add(ast_method_id)
         for source_id, target_id, _ in edges:
             if target_id != "hcg_root" and target_id not in parented and source_id != target_id:
                 tree.append((source_id, target_id, None))
@@ -241,7 +382,8 @@ def normalize_graph(graph: str, graph_type: str, source: str) -> str:
         for node in nodes[1:]:
             if node["id"] not in parented:
                 # Top-level executable structures belong to the method body.
-                tree.append(("hcg_method", node["id"], None))
+                parent = ast_root_id if node["type"] == "class_declaration" else ast_method_id
+                tree.append((parent, node["id"], None))
         edges = tree[: min(max_edges, len(nodes) - 1)]
     else:
         edges = edges[:max_edges]
@@ -286,8 +428,9 @@ def load_hierarchical_examples(csv_file: str, max_samples: int | None = None, in
         for row_number, row in enumerate(reader, 1):
             if not include_error_samples and str(row.get("is_error", "")).lower() == "true":
                 continue
-            source = decode_escaped_newlines((row.get(code_col) or "").strip())
+            original_source = decode_escaped_newlines((row.get(code_col) or "").strip())
             language = (row.get(language_col) or "").strip().lower()
+            source = strip_source_comments(original_source, language)
             targets = {
                 kind: decode_escaped_newlines((row.get(column) or "").strip())
                 for kind, column in graph_cols.items()
