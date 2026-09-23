@@ -9,8 +9,10 @@ script skips stages that this pipeline previously completed successfully.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -123,6 +125,24 @@ def _require_file(path: str, label: str) -> Path:
     if not value.is_file():
         raise FileNotFoundError(f"{label} does not exist: {value}")
     return value
+
+
+def _ensure_graph_dataset(path: str) -> Path:
+    """Use the cleaned CSV, extracting its checked-in gzip when necessary."""
+    value = Path(path).expanduser().resolve()
+    if value.is_file():
+        return value
+    archive = Path(f"{value}.gz")
+    if archive.is_file():
+        value.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Extracting cleaned graph dataset: {archive}")
+        with gzip.open(archive, "rb") as source, value.open("wb") as target:
+            shutil.copyfileobj(source, target)
+        return value
+    raise FileNotFoundError(
+        "Clean graph training dataset does not exist. Upload either of these "
+        f"files to the training server:\n  {value}\n  {archive}"
+    )
 
 
 def _require_model(path: str, label: str) -> Path:
@@ -256,7 +276,7 @@ def explanation_command(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    graph_data = _require_file(args.graph_train_file, "Clean graph training dataset")
+    graph_data = _ensure_graph_dataset(args.graph_train_file)
     for path in args.explanation_train_files:
         _require_file(path, "Explanation training dataset")
     repair_model = Path(args.repair_model).expanduser().resolve()
