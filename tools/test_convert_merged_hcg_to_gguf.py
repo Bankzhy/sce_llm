@@ -11,6 +11,8 @@ class ConvertMergedHcgToGgufTests(unittest.TestCase):
         args = parse_args([])
         self.assertTrue(args.model_dir.endswith("export/hcg_final_q4_k_m"))
         self.assertTrue(args.output_file.endswith("hcg-final-q4_k_m.gguf"))
+        self.assertTrue(args.intermediate_file.endswith("hcg-final-f16.gguf"))
+        self.assertTrue(args.binary_dir.endswith(".cache/llama.cpp-b8329"))
         self.assertFalse(args.force)
 
     def test_validate_merged_model(self):
